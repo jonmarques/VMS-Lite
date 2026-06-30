@@ -1,0 +1,19 @@
+[ {
+  "name" : "rio",
+  "url" : "rtsp://administrador:%40%40CaraVela25%40%24@192.168.0.50:554/stream1"
+}, {
+  "name" : "PATIO",
+  "url" : "rtsp://administrador:%40%40CaraVela25%40%24@192.168.0.3:554/stream1"
+}, {
+  "name" : "CAIXA DE AGUA",
+  "url" : "rtsp://192.168.0.31:554/user=bcsh_password=oZDHhHL1_channel=1_stream=1&onvif=1.sdp?real_stream"
+}, {
+  "name" : "TELHADO",
+  "url" : "rtsp://192.168.0.4:554/user=admin_password=tlJwpbo6_channel=0_stream=1&onvif=0.sdp?real_stream"
+}, {
+  "name" : "RIO FRENTE",
+  "url" : "rtsp://administrador:%40%40CaraVela25%40%24@192.168.0.24:554/stream1"
+}, {
+  "name" : "EXTERNO TINTAS",
+  "url" : "rtsp://192.168.0.244:554/user=xwft_password=Ki9dcZdr_channel=0_stream=1&onvif=0.sdp?real_stream"
+} ]
