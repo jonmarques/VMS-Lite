@@ -7,11 +7,10 @@
 
     <groupId>br.com.jonmarques</groupId>
     <artifactId>vmslite</artifactId>
-    <version>1.0.0</version>
+    <version>2.1.0</version>
 
     <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -112,7 +111,7 @@
                             <goal>exec</goal>
                         </goals>
                         <configuration>
-                            <executable>C:\Program Files\Java\jdk-21.0.11\bin\jpackage.exe</executable>
+                            <executable>${java.home}/bin/jpackage.exe</executable>
                             <arguments>
                                 <argument>--type</argument>
                                 <argument>app-image</argument>
@@ -123,12 +122,18 @@
                                 <argument>${project.build.directory}/installer-input</argument>
                                 
                                 <argument>--main-jar</argument>
-                                <argument>vmslite-1.0.0.jar</argument>
+                                <argument>${project.build.finalName}.jar</argument>
+                                <argument>--app-version</argument>
+                                <argument>${project.version}</argument>
                                 <argument>--main-class</argument>
                                 <argument>br.com.jonmarques.vmslite.VMSLite</argument>
                                 
                                 <argument>--dest</argument>
                                 <argument>${project.build.directory}/dist</argument>
+                                <argument>--vendor</argument>
+								<argument>Jonathan Marques</argument>
+								<argument>--description</argument>
+								<argument>Sistema de monitoramento de câmeras VMS Lite</argument>
                             </arguments>
                         </configuration>
                     </execution>

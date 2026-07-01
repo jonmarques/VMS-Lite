@@ -13,8 +13,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -23,6 +28,19 @@ import java.util.regex.Pattern;
 import java.net.URLEncoder;
 
 public class OnvifDiscoveryService {
+
+
+    private static class PerfilInfo {
+        final String token;
+        final String nome;
+        final int largura; // -1 se a câmera não informou resolução para este perfil
+
+        PerfilInfo(String token, String nome, int largura) {
+            this.token = token;
+            this.nome = nome;
+            this.largura = largura;
+        }
+    }
 
     /**
      * 1. MÉTODO DE DESCOBERTA (WS-Discovery) - AJUSTADO PARA RETORNAR MAP
@@ -120,28 +138,14 @@ public class OnvifDiscoveryService {
 
     public String obterUrlRtsp(String serviceUrl, String usuario, String senha, String modelo, String ipPadrao, boolean preferirSubstream) {
         if (serviceUrl != null && !serviceUrl.isBlank()) {
-            String cabecalhoSeguranca = criarCabecalhoSeguranca(usuario, senha);
-            Map<String, String> perfis = obterTokensPerfis(serviceUrl, cabecalhoSeguranca);
+        	
+            long offsetRelogio = calcularOffsetRelogio(serviceUrl);
+
+            String cabecalhoSeguranca = criarCabecalhoSeguranca(usuario, senha, offsetRelogio);
+            List<PerfilInfo> perfis = obterPerfis(serviceUrl, cabecalhoSeguranca);
 
             if (!perfis.isEmpty()) {
-                String tokenEscolhido = null;
-
-                // Lógica de seleção inteligente
-                for (Map.Entry<String, String> entry : perfis.entrySet()) {
-                    String nome = entry.getValue();
-                    boolean ehSub = nome.contains("sub") || nome.contains("low") || nome.contains("second");
-                    
-                    if (preferirSubstream && ehSub) {
-                        tokenEscolhido = entry.getKey();
-                        break; 
-                    } else if (!preferirSubstream && !ehSub) {
-                        tokenEscolhido = entry.getKey();
-                        break;
-                    }
-                }
-                
-                // Se não achou o desejado, pega o primeiro disponível
-                if (tokenEscolhido == null) tokenEscolhido = perfis.keySet().iterator().next();
+                String tokenEscolhido = escolherPerfil(perfis, preferirSubstream);
 
                 String urlRtsp = obterUriStreamOnvif(serviceUrl, cabecalhoSeguranca, tokenEscolhido);
                 if (urlRtsp != null && !urlRtsp.isBlank()) {
@@ -157,10 +161,66 @@ public class OnvifDiscoveryService {
         System.out.println("ONVIF falhou ou indisponível. Fallback para: " + modelo);
         return montarUrlRtspFallback(ipPadrao, usuario, senha, modelo);
     }
+
+    private String escolherPerfil(List<PerfilInfo> perfis, boolean preferirSubstream) {
+        boolean temResolucaoParaTodos = perfis.size() > 1
+                && perfis.stream().allMatch(p -> p.largura > 0);
+
+        if (temResolucaoParaTodos) {
+            PerfilInfo escolhido = preferirSubstream
+                    ? perfis.stream().min(Comparator.comparingInt(p -> p.largura)).orElse(perfis.get(0))
+                    : perfis.stream().max(Comparator.comparingInt(p -> p.largura)).orElse(perfis.get(0));
+            return escolhido.token;
+        }
+
+        for (PerfilInfo p : perfis) {
+            boolean ehSub = p.nome.contains("sub") || p.nome.contains("low")
+                    || p.nome.contains("second") || p.nome.contains("mobile");
+            if (preferirSubstream && ehSub) return p.token;
+            if (!preferirSubstream && !ehSub) return p.token;
+        }
+
+        return perfis.get(0).token;
+    }
+
+  
+    private long calcularOffsetRelogio(String serviceUrl) {
+        try {
+            String body = "<tds:GetSystemDateAndTime xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\"/>";
+            String response = enviarRequisicaoSoap(serviceUrl, "<s:Header/>", body);
+            if (response == null || response.isBlank()) return 0;
+
+            Pattern p = Pattern.compile(
+                "<[^:>]*:?UTCDateTime>.*?" +
+                "<[^:>]*:?Year>(\\d+)</[^:>]*:?Year>.*?" +
+                "<[^:>]*:?Month>(\\d+)</[^:>]*:?Month>.*?" +
+                "<[^:>]*:?Day>(\\d+)</[^:>]*:?Day>.*?" +
+                "<[^:>]*:?Hour>(\\d+)</[^:>]*:?Hour>.*?" +
+                "<[^:>]*:?Minute>(\\d+)</[^:>]*:?Minute>.*?" +
+                "<[^:>]*:?Second>(\\d+)</[^:>]*:?Second>",
+                Pattern.DOTALL
+            );
+            Matcher m = p.matcher(response);
+            if (m.find()) {
+                ZonedDateTime deviceTime = ZonedDateTime.of(
+                    Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)),
+                    Integer.parseInt(m.group(4)), Integer.parseInt(m.group(5)), Integer.parseInt(m.group(6)),
+                    0, ZoneOffset.UTC
+                );
+                return deviceTime.toInstant().toEpochMilli() - Instant.now().toEpochMilli();
+            }
+        } catch (Exception e) {
+            System.err.println("Aviso: não foi possível sincronizar relógio com o dispositivo ONVIF: " + e.getMessage());
+        }
+        return 0;
+    }
+
     /**
      * 3. CRIAÇÃO DO CABEÇALHO DE SEGURANÇA
+     * CORREÇÃO: recebe o offset de relógio calculado em relação ao dispositivo, em vez
+     * de assumir que o relógio do PC está correto.
      */
-    private String criarCabecalhoSeguranca(String usuario, String senha) {
+    private String criarCabecalhoSeguranca(String usuario, String senha, long offsetRelogioMs) {
         if (usuario == null || usuario.isBlank()) {
             return "<s:Header/>";
         }
@@ -168,7 +228,7 @@ public class OnvifDiscoveryService {
             byte[] nonceBytes = new byte[16];
             new SecureRandom().nextBytes(nonceBytes);
             String nonceBase64 = Base64.getEncoder().encodeToString(nonceBytes);
-            String created = Instant.now().toString();
+            String created = Instant.now().plusMillis(offsetRelogioMs).toString();
 
             MessageDigest md = MessageDigest.getInstance("SHA-1");
             md.update(nonceBytes);
@@ -194,21 +254,44 @@ public class OnvifDiscoveryService {
         }
     }
 
-    /**
-     * Retorna um mapa de Token -> Nome do Perfil
-     */
-    private Map<String, String> obterTokensPerfis(String serviceUrl, String cabecalhoSeguranca) {
-        Map<String, String> perfis = new HashMap<>();
+ 
+    private List<PerfilInfo> obterPerfis(String serviceUrl, String cabecalhoSeguranca) {
+        // LinkedHashMap/List preserva a ordem em que os perfis vieram na resposta da
+        // câmera (normalmente o stream principal é listado primeiro).
+        List<PerfilInfo> perfis = new ArrayList<>();
         String response = enviarRequisicaoSoap(serviceUrl, cabecalhoSeguranca, "<trt:GetProfiles/>");
         if (response == null || response.isBlank()) return perfis;
 
-        // Regex que captura tanto o token quanto o nome do perfil
-        Pattern pattern = Pattern.compile("<tt:Profile token=\"([^\"]+)\">.*?<tt:Name>([^<]+)</tt:Name>", Pattern.DOTALL);
-        Matcher matcher = pattern.matcher(response);
-        while (matcher.find()) {
-            String token = matcher.group(1);
-            String nome = matcher.group(2).toLowerCase();
-            perfis.put(token, nome);
+        // Aceita "Profile" ou "Profiles" (varia por firmware/versão ONVIF) e qualquer
+        // prefixo de namespace (ou nenhum), com atributos extras antes do ">".
+        Pattern blocoPattern = Pattern.compile(
+            "<[^:>]*:?Profiles?[^>]*\\btoken=\"([^\"]+)\"[^>]*>(.*?)</[^:>]*:?Profiles?>",
+            Pattern.DOTALL
+        );
+        Matcher blocoMatcher = blocoPattern.matcher(response);
+
+        while (blocoMatcher.find()) {
+            String token = blocoMatcher.group(1);
+            String bloco = blocoMatcher.group(2);
+
+            String nome = "";
+            Matcher nomeMatcher = Pattern.compile("<[^:>]*:?Name>([^<]+)</[^:>]*:?Name>").matcher(bloco);
+            if (nomeMatcher.find()) {
+                nome = nomeMatcher.group(1).trim().toLowerCase();
+            }
+
+            int largura = -1;
+            Matcher largMatcher = Pattern.compile(
+                "<[^:>]*:?Resolution>\\s*<[^:>]*:?Width>(\\d+)</[^:>]*:?Width>",
+                Pattern.DOTALL
+            ).matcher(bloco);
+            if (largMatcher.find()) {
+                try {
+                    largura = Integer.parseInt(largMatcher.group(1));
+                } catch (NumberFormatException ignored) {}
+            }
+
+            perfis.add(new PerfilInfo(token, nome, largura));
         }
         return perfis;
     }
@@ -285,8 +368,6 @@ public class OnvifDiscoveryService {
             return null;
         }
     }
-
-;
 
     private String montarUrlRtspFallback(String ipPadrao, String usuario, String senha, String modelo) {
         if (ipPadrao == null || ipPadrao.isBlank()) return null;

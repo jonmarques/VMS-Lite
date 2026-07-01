@@ -9,12 +9,11 @@ import br.com.jonmarques.vmslite.entity.VMSConfig;
 import br.com.jonmarques.vmslite.service.ConfigService;
 import br.com.jonmarques.vmslite.service.OnvifDiscoveryService;
 import uk.co.caprica.vlcj.binding.support.runtime.RuntimeUtil;
+import uk.co.caprica.vlcj.factory.MediaPlayerFactory;
 
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
-import java.awt.event.MouseEvent;
-import java.awt.event.MouseMotionAdapter;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,19 +44,19 @@ public class VMSLite extends JFrame {
     private JButton btnFullscreenGlass; // Botão que fica flutuando em tela cheia
     private JPanel glassPanel; // Painel transparente para o GlassPane
 
+    private javax.swing.Timer resizeDebounce;
+
     boolean[][] ocupada;
+
+	private MediaPlayerFactory factory;
     
     public VMSLite() {
    
 		super("VMS Lite");
 		
-		System.setProperty("sun.java2d.d3d", "true");
-	    System.setProperty("sun.java2d.ddforcevram", "true");
+		System.setProperty("sun.java2d.opengl", "true");
 	    System.setProperty("swing.bufferPerWindow", "true");
 	    System.setProperty("sun.java2d.noddraw", "true");
-
-	    // ADICIONE ESTAS DUAS PARA CORRIGIR O MODO EMBEDDED:
-	    // Impede que o Windows tente apagar o fundo do Canvas do VLC ao arrastar ou redimensionar a grade
 	    System.setProperty("sun.awt.noerasebackground", "true");
 	    System.setProperty("sun.awt.erasebackgroundonresize", "false");
 	    
@@ -75,8 +74,46 @@ public class VMSLite extends JFrame {
 		    basePath + "/app/vlc"
 		);
 		
+        List<String> vlcArgs = new ArrayList<>();
+
+
+     vlcArgs.add("--avcodec-hw=any");
+     vlcArgs.add("--avcodec-threads=2"); 
+     vlcArgs.add("--drop-late-frames"); 
+     vlcArgs.add("--skip-frames");      
+     vlcArgs.add("--network-caching=400");
+     vlcArgs.add("--live-caching=400");
+     vlcArgs.add("--file-caching=400");
+     vlcArgs.add("--clock-jitter=500000");
+     vlcArgs.add("--clock-synchro=1");
+     vlcArgs.add("--rtsp-tcp"); 
+     vlcArgs.add("--no-audio");                
+     vlcArgs.add("--no-video-title-show");     
+     vlcArgs.add("--no-stats");                
+     vlcArgs.add("--quiet");
+     vlcArgs.add("--verbose=-1"); 
+     vlcArgs.add("--avcodec-skiploopfilter=4"); 
+     vlcArgs.add("--avcodec-fast");             
+     vlcArgs.add("--rtsp-frame-buffer-size=2000000");
+        this.factory = new MediaPlayerFactory(vlcArgs);
+		
      	instance = this;
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
+
+        setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                for (CameraPanel panel : cameras) {
+                    panel.stop();
+                }
+                if (factory != null) {
+                    factory.release(); // única liberação da factory compartilhada, aqui
+                }
+                dispose();
+                System.exit(0);
+            }
+        });
+
         setSize(1400, 900);
         setLocationRelativeTo(null);
     	vmsconfig = ConfigService.load();
@@ -113,21 +150,24 @@ public class VMSLite extends JFrame {
         camerasPanel.addComponentListener(new ComponentAdapter() {
             @Override
             public void componentResized(ComponentEvent e) {
-                rebuildLayout();
+                if (resizeDebounce != null) {
+                    resizeDebounce.stop();
+                }
+                resizeDebounce = new javax.swing.Timer(80, ev -> rebuildLayout());
+                resizeDebounce.setRepeats(false);
+                resizeDebounce.start();
             }
-        });    	
+        });
         
      // --- Barra Superior (Modo Janela) ---
         topBar = new JPanel();
-        // Alterado para BoxLayout no eixo X (Horizontal) para fazer a mola funcionar
         topBar.setLayout(new BoxLayout(topBar, BoxLayout.X_AXIS));
-        // Adiciona uma pequena margem interna para os botões não colarem nas bordas da janela
         topBar.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 
         JButton addButton = new JButton("Adicionar Câmera");
         addButton.addActionListener(e -> addCameraDialog());
         topBar.add(addButton);
-        topBar.add(Box.createHorizontalStrut(5)); // Espaçamento de 5px entre os botões
+        topBar.add(Box.createHorizontalStrut(5));
 
         JButton gridButton = new JButton("Layout");
         gridButton.addActionListener(e -> showGridDialog());
@@ -148,15 +188,11 @@ public class VMSLite extends JFrame {
         topBar.add(onvifButton);
         onvifButton.addActionListener(e -> executarBuscaOnvif(onvifButton));
 
-        // ====================================================================
-        // MOLA HORIZONTAL: Ocupa todo o espaço restante e joga o próximo botão para a direita
-        // ====================================================================
         topBar.add(Box.createHorizontalGlue());
 
-        // Botão de Tela Cheia Destacado
         btnFullscreen = new JButton("Tela Cheia ⛶");
         btnFullscreen.setFocusable(false);
-        btnFullscreen.setBackground(new Color(30, 144, 255)); // Azul Dodger
+        btnFullscreen.setBackground(new Color(30, 144, 255));
         btnFullscreen.setForeground(Color.WHITE);
         btnFullscreen.setBorderPainted(false);
         btnFullscreen.setFont(btnFullscreen.getFont().deriveFont(Font.BOLD));
@@ -166,27 +202,22 @@ public class VMSLite extends JFrame {
 
         add(topBar, BorderLayout.NORTH);
 
-               
-        // --- Configuração do Botão Flutuante (Modo Tela Cheia) ---
         setupGlassPaneForFullscreen();
     }
     
     private void setupGlassPaneForFullscreen() {
-        // Criando o botão com o texto correto
         btnFullscreenGlass = new JButton("Sair Tela Cheia ⛶");
         btnFullscreenGlass.setFocusable(false);
-        btnFullscreenGlass.setVisible(false); // Começa invisível, controlado pelo gerenciarBotaoJanela
+        btnFullscreenGlass.setVisible(false);
 
-        // --- Customização Visual (FlatLaf) ---
-        btnFullscreenGlass.setBackground(new Color(220, 53, 69)); // Vermelho elegante (estilo Bootstrap/Danger)
+        btnFullscreenGlass.setBackground(new Color(220, 53, 69));
         btnFullscreenGlass.setForeground(Color.WHITE);
         btnFullscreenGlass.setBorderPainted(false);
         btnFullscreenGlass.setFont(btnFullscreenGlass.getFont().deriveFont(Font.BOLD));
-        btnFullscreenGlass.putClientProperty("JButton.buttonType", "roundRect"); // Bordas arredondadas
+        btnFullscreenGlass.putClientProperty("JButton.buttonType", "roundRect");
 
         btnFullscreenGlass.addActionListener(e -> toggleFullscreen());
 
-        // Painel transparente por cima de toda a tela (Layout nulo para posicionamento absoluto)
         glassPanel = new JPanel(null);
         glassPanel.setOpaque(false);
         glassPanel.add(btnFullscreenGlass);
@@ -197,27 +228,19 @@ public class VMSLite extends JFrame {
     public void gerenciarBotaoJanela(Point pontoNaTela) {
         if (!isFullscreen()) return;
 
-        // Obtém a resolução atual do monitor onde a janela está aberta
         GraphicsConfiguration config = getGraphicsConfiguration();
         Rectangle bounds = config.getBounds();
 
-        // ====================================================================
-        // CÁLCULO PARA O CANTO DIREITO SUPERIOR
-        // ====================================================================
-        int larguraBotao = 140; // Defina a largura estimada do seu botão de fechar/sair
-        int margemDireita = 20;  // Distância da borda direita da tela
+        int larguraBotao = 140;
+        int margemDireita = 20;
         
-        // X absoluto na tela: Largura total do monitor menos a largura do botão e a margem
         int xBotao = bounds.x + bounds.width - larguraBotao - margemDireita;
-        int yBotao = bounds.y + 15; // 15px de distância do topo da tela
+        int yBotao = bounds.y + 15;
 
-        // Se o mouse se aproximar do topo direito da tela (ex: nos primeiros 80 pixels de Y e após o X calculado)
         if (pontoNaTela.y < bounds.y + 80 && pontoNaTela.x > xBotao - 50) {
-            // Exibe o botão de fechar na posição correta do canto direito
         	btnFullscreenGlass.setBounds(xBotao, yBotao, larguraBotao, 35);
         	btnFullscreenGlass.setVisible(true);
         } else {
-            // Esconde o botão se o mouse se afastar daquela região
         	btnFullscreenGlass.setVisible(false);
         }
     }
@@ -270,7 +293,7 @@ public class VMSLite extends JFrame {
     }
 
     private void addCamera(Camera config) {
-        CameraPanel panel = new CameraPanel(this, config);
+        CameraPanel panel = new CameraPanel(this, config, factory);
 
         cameras.add(panel);
         configs.add(config);
@@ -326,15 +349,19 @@ public class VMSLite extends JFrame {
             VMSConfig config = ConfigService.loadFromFile(selectedFile);
             ConfigService.save(config);
 
+            for (CameraPanel oldPanel : cameras) {
+                oldPanel.stop();
+            }
+
             cameras.clear();
             configs.clear();
             camerasPanel.removeAll();
 
+            vmsconfig.setLayoutRows(config.getLayoutRows());
+            vmsconfig.setLayoutCols(config.getLayoutCols());
+
             for (Camera cam : config.getCameras()) {
-            	CameraPanel panel = new CameraPanel(this, cam);
-            	cameras.add(panel);
-            	configs.add(cam);
-            	camerasPanel.add(panel);
+                addCamera(cam);
             }
 
             rebuildLayout();
@@ -361,53 +388,42 @@ public class VMSLite extends JFrame {
     }
     
     private void toggleFullscreen() {
-        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
-        GraphicsDevice gd = ge.getDefaultScreenDevice();
 
         if (!fullscreen) {
-            // --- ENTRANDO EM TELA CHEIA NATIVA ---
-            windowBounds = getBounds(); 
+            windowBounds = getBounds();
 
-            // 1. Remove a barra superior do layout Swing
             remove(topBar);
-
-            // 2. Ativa o GlassPane superior para conter o botão flutuante
             getGlassPane().setVisible(true);
-            btnFullscreenGlass.setVisible(false); 
+            btnFullscreenGlass.setVisible(false);
 
-            // 3. Método nativo alternador
-            if (gd.isFullScreenSupported()) {
-                gd.setFullScreenWindow(this);
-            } else {
-                setExtendedState(JFrame.MAXIMIZED_BOTH);
-                setSize(Toolkit.getDefaultToolkit().getScreenSize());
-                setVisible(true);
-            }
+            GraphicsConfiguration gc = getGraphicsConfiguration();
+            Rectangle screenBounds = (gc != null)
+                    ? gc.getBounds()
+                    : new Rectangle(Toolkit.getDefaultToolkit().getScreenSize());
+
+            dispose();
+            setUndecorated(true);
+            setBounds(screenBounds);
+            setVisible(true);
 
             fullscreen = true;
+
         } else {
-            // --- SAINDO DE TELA CHEIA NATIVA ---
-            if (gd.isFullScreenSupported()) {
-                gd.setFullScreenWindow(null);
-            }
-            
-            setExtendedState(JFrame.NORMAL);
+            // --- SAINDO DE TELA CHEIA ---
+            dispose();
+            setUndecorated(false);
             setBounds(windowBounds);
 
-            // Oculta a camada superior de controle
             getGlassPane().setVisible(false);
-
-            // Devolve a barra superior de ferramentas
             add(topBar, BorderLayout.NORTH);
+
+            setVisible(true);
 
             fullscreen = false;
         }
 
-        SwingUtilities.invokeLater(() -> {
-            rebuildLayout();
-            revalidate();
-            repaint();
-        });
+        revalidate();
+        repaint();
     }
     
     public void rebuildLayout() {
@@ -560,9 +576,7 @@ public class VMSLite extends JFrame {
         botaoMenu.setEnabled(false);
         botaoMenu.setText("Escaneando Rede...");
 
-        // Executa o descobrimento em background
         OnvifDiscoveryService.discoverDevices(dispositivos -> {
-            // CORREÇÃO CRÍTICA: Transfere a execução de volta para a EDT (Event Dispatch Thread) do Swing
             SwingUtilities.invokeLater(() -> {
                 botaoMenu.setEnabled(true);
                 botaoMenu.setText("Buscar ONVIF 🔍");
@@ -589,7 +603,6 @@ public class VMSLite extends JFrame {
                     }
                 }
 
-                // Ordenação dos IPs
                 ipsFiltrados.sort((ip1, ip2) -> {
                     try {
                         String[] parts1 = ip1.split("\\.");
@@ -647,7 +660,6 @@ public class VMSLite extends JFrame {
                     List<String> linhasSelecionadas = deviceList.getSelectedValuesList();
                     if (linhasSelecionadas.isEmpty()) return;
 
-                    // Instancia o serviço ONVIF moderno que configuramos anteriormente
                     br.com.jonmarques.vmslite.service.OnvifDiscoveryService serviceOnvif = new br.com.jonmarques.vmslite.service.OnvifDiscoveryService();
 
                     for (String linha : linhasSelecionadas) {
@@ -693,14 +705,11 @@ public class VMSLite extends JFrame {
                         if (loginOption == JOptionPane.OK_OPTION) {
                             String user = userField.getText().trim();
                             String pass = new String(passField.getPassword()).trim();
-                            boolean isSubstream = streamCombo.getSelectedIndex() == 1; // 0 para Main, 1 para Sub
+                            boolean isSubstream = streamCombo.getSelectedIndex() == 1;
                             String nomeFinal = nameField.getText().trim();
 
-                            // 1. Usa o XAddr que o OnvifDiscoveryService já nos forneceu (muito mais preciso que forçar porta 80)
                             String serviceUrl = dispositivos.get(ip); 
 
-                            // 2. Chama o método melhorado passando a flag isSubstream
-                            // O serviço se encarrega de encontrar o perfil correto agora
                             String rtspUrl = serviceOnvif.obterUrlRtsp(serviceUrl, user, pass, modelo, ip, isSubstream);
 
                             if (rtspUrl != null) {

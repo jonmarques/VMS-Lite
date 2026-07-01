@@ -3,8 +3,8 @@ package br.com.jonmarques.vmslite;
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory;
 import uk.co.caprica.vlcj.player.base.MediaPlayer;
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter;
-import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent; // ALTERADO: Componente Leve (Lightweight)
-import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent;
+import uk.co.caprica.vlcj.player.base.MediaPlayerEventListener;
+import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent; // Componente Leve (Lightweight)
 
 import javax.swing.*;
 import br.com.jonmarques.vmslite.entity.Camera;
@@ -13,63 +13,51 @@ import br.com.jonmarques.vmslite.listener.GridDragListener;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.util.ArrayList;
-import java.util.List;
 
 public class CameraPanel extends JPanel {
 
     private static final long serialVersionUID = 1L;
 
     private final Camera camera;
-    
-    // MUDANÇA CRÍTICA: Renderização via Software/Memória. Perfeito para grades e sobreposição de JLabels
+
+    // Renderização via Software/Memória. Perfeito para grades e sobreposição de JLabels
     private final CallbackMediaPlayerComponent player;
     private final JLabel loadingLabel;
     private volatile boolean reconnecting = false;
     private boolean arrastando = false;
     private volatile boolean released = false;
-    private MediaPlayerFactory factory;
     private volatile boolean bootInicializado = false;
-    
-    public CameraPanel(VMSLite vmslite, Camera camera) {
+
+    private MediaPlayerEventListener currentListener;
+
+    private static final String[] MEDIA_OPTIONS = {
+        ":rtsp-tcp",
+        ":network-caching=400",
+        ":live-caching=400",
+        ":file-caching=400",
+        ":clock-synchro=1",
+        ":clock-jitter=500000",
+        ":avcodec-hw=any"
+    };
+
+    public CameraPanel(VMSLite vmslite, Camera camera, MediaPlayerFactory factory) {
         this.camera = camera;
         setLayout(new BorderLayout());
 
-        List<String> vlcArgs = new ArrayList<>();
-
-     // 1. DESATIVAR HARDWARE (Mantido para estabilidade no JPackage)
-     vlcArgs.add("--avcodec-hw=none"); 
-
-     // 2. FORÇAR MULTITHREADING NA CPU
-     vlcArgs.add("--ffmpeg-threads=2"); 
-
-     // 3. PRIORIZAR TEMPO REAL
-     vlcArgs.add("--drop-late-frames"); 
-     vlcArgs.add("--skip-frames");      
-
-     // 4. CACHE E SINCRONIA (Ajustados para evitar flickering)
-     vlcArgs.add("--network-caching=400"); // Aumentado de 300 para 400ms para maior buffer
-     vlcArgs.add("--live-caching=400");
-     vlcArgs.add("--file-caching=400");
-     vlcArgs.add("--clock-jitter=500000"); // Tolerância natural de 500ms (não force zero)
-     vlcArgs.add("--clock-synchro=1");     // ATIVADO: Essencial para sincronizar e parar o "vai e volta"
-     vlcArgs.add("--rtsp-tcp"); 
-
-     // 5. SILENCIAR COMPONENTE
-     vlcArgs.add("--no-audio");                
-     vlcArgs.add("--no-video-title-show");     
-     vlcArgs.add("--no-stats");                
-     vlcArgs.add("--quiet");
-     vlcArgs.add("--verbose=-1"); 
-
-     // 6. OTIMIZAÇÃO DE CODEC
-     vlcArgs.add("--avcodec-skiploopfilter=4"); 
-     vlcArgs.add("--avcodec-fast");             
-     vlcArgs.add("--rtsp-frame-buffer-size=2000000");
-        this.factory = new MediaPlayerFactory(vlcArgs);
-        // Instanciando o componente Lightweight (Callback)
-        this.player = new CallbackMediaPlayerComponent();
-        factory.mediaPlayers().newEmbeddedMediaPlayer();
+        this.player = new CallbackMediaPlayerComponent(
+            factory, // MediaPlayerFactory compartilhada, com todas as otimizações
+            null,    // FullScreenStrategy (não usado, fullscreen é tratado manualmente)
+            null,    // InputEvents (mouse/teclado tratados manualmente com listeners próprios)
+            true,    // lockBuffers
+            null,    // RenderCallback (usa o painter padrão)
+            null,    // BufferFormatCallback (usa o formato padrão)
+            null     // JComponent videoSurfaceComponent (usa o componente leve padrão)
+        );
+        player.setOpaque(true);
+        player.setBackground(Color.BLACK);
+        // CORREÇÃO: removida a linha "factory.mediaPlayers().newEmbeddedMediaPlayer();"
+        // Ela criava um segundo player nativo "fantasma", nunca usado e nunca liberado,
+        // consumindo memória/threads à toa para cada câmera da grade.
 
         loadingLabel = new JLabel("Carregando...", SwingConstants.CENTER);
         loadingLabel.setOpaque(true);
@@ -109,11 +97,11 @@ public class CameraPanel extends JPanel {
             videoSurface.addMouseListener(mouseAdapter);
             videoSurface.addMouseListener(dragListener);
             videoSurface.addMouseMotionListener(dragListener);
-            
+
             videoSurface.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
                 @Override
                 public void mouseMoved(java.awt.event.MouseEvent e) {
-                    if (vmslite.isFullscreen()) { 
+                    if (vmslite.isFullscreen()) {
                         Point pontoNaTela = e.getLocationOnScreen();
                         vmslite.gerenciarBotaoJanela(pontoNaTela);
                     }
@@ -146,7 +134,7 @@ public class CameraPanel extends JPanel {
         if (arrastando) {
             player.setVisible(false);
             loadingLabel.setText("Movendo: " + camera.getName());
-            loadingLabel.setBackground(new Color(30, 144, 255, 200)); 
+            loadingLabel.setBackground(new Color(30, 144, 255, 200));
             loadingLabel.setVisible(true);
         } else {
             player.setVisible(true);
@@ -161,17 +149,23 @@ public class CameraPanel extends JPanel {
         loadingLabel.setVisible(true);
         loadingLabel.setText("Carregando...");
 
-        player.mediaPlayer().events().removeMediaEventListener(null); 
+        // CORREÇÃO: remove de fato o listener anterior (se existir) antes de adicionar um novo.
+        // Antes: removeMediaEventListener(null) não tinha efeito nenhum, então cada chamada de
+        // start() empilhava um novo listener, multiplicando callbacks (playing/error/stopped)
+        // e disparando múltiplas tentativas de reconexão simultâneas.
+        if (currentListener != null) {
+            player.mediaPlayer().events().removeMediaPlayerEventListener(currentListener);
+        }
 
-        player.mediaPlayer().events().addMediaPlayerEventListener(new MediaPlayerEventAdapter() {
+        currentListener = new MediaPlayerEventAdapter() {
             @Override
             public void playing(MediaPlayer mediaPlayer) {
                 SwingUtilities.invokeLater(() -> {
                     loadingLabel.setVisible(false);
-                    // CORREÇÃO: Removido o setScale(0) que quebrava câmeras específicas comprimindo-as para 0x0 pixels
+                    // Removido o setScale(0) que quebrava câmeras específicas comprimindo-as para 0x0 pixels
                     player.mediaPlayer().video().setAspectRatio(null);
                 });
-                bootInicializado = true; 
+                bootInicializado = true;
             }
 
             @Override
@@ -185,17 +179,18 @@ public class CameraPanel extends JPanel {
             }
 
             @Override
-            public void stopped(MediaPlayer mediaPlayer) { 
+            public void stopped(MediaPlayer mediaPlayer) {
                 if (!released && isDisplayable() && bootInicializado) {
-                    reconnect(); 
+                    reconnect();
                 } else {
                     System.out.println("Aviso: 'Stopped' ignorado durante a montagem inicial da grade para: " + camera.getName());
                 }
             }
-        });
+        };
+        player.mediaPlayer().events().addMediaPlayerEventListener(currentListener);
 
         if (!released) {
-            player.mediaPlayer().media().play(camera.getUrl());
+            player.mediaPlayer().media().play(camera.getUrl(), MEDIA_OPTIONS);
         }
     }
 
@@ -220,19 +215,7 @@ public class CameraPanel extends JPanel {
 
                     boolean ok = false;
                     if (!released && player.mediaPlayer() != null) {
-                    	// Em vez de dar play apenas com a URL, passe argumentos de escala da mídia
-                    	// Em vez de usar os valores agressivos antigos, use estes:
-                    	String[] options = {
-                    	    ":rtsp-tcp",                // Essencial: Mantém a estabilidade
-                    	    ":network-caching=400",     // Suba para 400ms para evitar falhas na rede
-                    	    ":live-caching=400",
-                    	    ":file-caching=400",
-                    	    ":clock-synchro=1",         // OBRIGATÓRIO: Habilita sincronia para o vídeo não "pular"
-                    	    ":clock-jitter=500000",     // Permite uma tolerância natural
-                    	    ":avcodec-hw=none"          // Mude para 'none' para garantir que não haverá conflito de hardware
-                    	};
-
-                    	ok = player.mediaPlayer().media().play(camera.getUrl(), options);
+                        ok = player.mediaPlayer().media().play(camera.getUrl(), MEDIA_OPTIONS);
                     }
 
                     if (ok || released) {
@@ -249,17 +232,25 @@ public class CameraPanel extends JPanel {
     }
 
     public void stop() {
-        this.released = true;       
-        this.reconnecting = false;  
-        
+        this.released = true;
+        this.reconnecting = false;
+
         try {
+            if (currentListener != null && player.mediaPlayer() != null) {
+                player.mediaPlayer().events().removeMediaPlayerEventListener(currentListener);
+                currentListener = null;
+            }
             if (player.mediaPlayer() != null) {
                 player.mediaPlayer().controls().stop();
             }
-            player.release(); 
-            if (factory != null) {
-                factory.release(); 
-            }
+            player.release();
+
+            // CORREÇÃO: removido "factory.release()" daqui.
+            // Se a MediaPlayerFactory for compartilhada entre as câmeras da grade (recebida
+            // por parâmetro no construtor, sugerindo isso), liberá-la ao fechar UMA câmera
+            // derruba o player nativo de TODAS as outras, causando travamentos/reconexões
+            // em cascata. O release da factory deve acontecer uma única vez, no encerramento
+            // da aplicação (em VMSLite), não aqui.
         } catch (Exception e) {
             System.err.println("Aviso: Erro ao liberar recursos nativos da câmera " + camera.getName());
         }
