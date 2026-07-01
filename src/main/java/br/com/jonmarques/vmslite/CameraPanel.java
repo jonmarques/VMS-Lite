@@ -20,7 +20,6 @@ public class CameraPanel extends JPanel {
 
     private final Camera camera;
 
-    // Renderização via Software/Memória. Perfeito para grades e sobreposição de JLabels
     private final CallbackMediaPlayerComponent player;
     private final JLabel loadingLabel;
     private volatile boolean reconnecting = false;
@@ -55,9 +54,6 @@ public class CameraPanel extends JPanel {
         );
         player.setOpaque(true);
         player.setBackground(Color.BLACK);
-        // CORREÇÃO: removida a linha "factory.mediaPlayers().newEmbeddedMediaPlayer();"
-        // Ela criava um segundo player nativo "fantasma", nunca usado e nunca liberado,
-        // consumindo memória/threads à toa para cada câmera da grade.
 
         loadingLabel = new JLabel("Carregando...", SwingConstants.CENTER);
         loadingLabel.setOpaque(true);
@@ -149,10 +145,6 @@ public class CameraPanel extends JPanel {
         loadingLabel.setVisible(true);
         loadingLabel.setText("Carregando...");
 
-        // CORREÇÃO: remove de fato o listener anterior (se existir) antes de adicionar um novo.
-        // Antes: removeMediaEventListener(null) não tinha efeito nenhum, então cada chamada de
-        // start() empilhava um novo listener, multiplicando callbacks (playing/error/stopped)
-        // e disparando múltiplas tentativas de reconexão simultâneas.
         if (currentListener != null) {
             player.mediaPlayer().events().removeMediaPlayerEventListener(currentListener);
         }
@@ -162,7 +154,6 @@ public class CameraPanel extends JPanel {
             public void playing(MediaPlayer mediaPlayer) {
                 SwingUtilities.invokeLater(() -> {
                     loadingLabel.setVisible(false);
-                    // Removido o setScale(0) que quebrava câmeras específicas comprimindo-as para 0x0 pixels
                     player.mediaPlayer().video().setAspectRatio(null);
                 });
                 bootInicializado = true;
@@ -244,13 +235,6 @@ public class CameraPanel extends JPanel {
                 player.mediaPlayer().controls().stop();
             }
             player.release();
-
-            // CORREÇÃO: removido "factory.release()" daqui.
-            // Se a MediaPlayerFactory for compartilhada entre as câmeras da grade (recebida
-            // por parâmetro no construtor, sugerindo isso), liberá-la ao fechar UMA câmera
-            // derruba o player nativo de TODAS as outras, causando travamentos/reconexões
-            // em cascata. O release da factory deve acontecer uma única vez, no encerramento
-            // da aplicação (em VMSLite), não aqui.
         } catch (Exception e) {
             System.err.println("Aviso: Erro ao liberar recursos nativos da câmera " + camera.getName());
         }

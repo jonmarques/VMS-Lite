@@ -8,6 +8,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
+import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -33,7 +34,7 @@ public class OnvifDiscoveryService {
     private static class PerfilInfo {
         final String token;
         final String nome;
-        final int largura; // -1 se a câmera não informou resolução para este perfil
+        final int largura;
 
         PerfilInfo(String token, String nome, int largura) {
             this.token = token;
@@ -42,10 +43,6 @@ public class OnvifDiscoveryService {
         }
     }
 
-    /**
-     * 1. MÉTODO DE DESCOBERTA (WS-Discovery) - AJUSTADO PARA RETORNAR MAP
-     * Alinhado com o seu código principal que faz uso de .keySet()
-     */
     public static void discoverDevices(Consumer<Map<String, String>> callback) {
         Thread discoveryThread = new Thread(() -> {
             System.out.println("Iniciando descoberta de dispositivos ONVIF (WS-Discovery)...");
@@ -217,8 +214,6 @@ public class OnvifDiscoveryService {
 
     /**
      * 3. CRIAÇÃO DO CABEÇALHO DE SEGURANÇA
-     * CORREÇÃO: recebe o offset de relógio calculado em relação ao dispositivo, em vez
-     * de assumir que o relógio do PC está correto.
      */
     private String criarCabecalhoSeguranca(String usuario, String senha, long offsetRelogioMs) {
         if (usuario == null || usuario.isBlank()) {
@@ -328,7 +323,7 @@ public class OnvifDiscoveryService {
      */
     private String enviarRequisicaoSoap(String url, String header, String body) {
         try {
-            URL obj = new URL(url);
+            URL obj = URI.create(url).toURL();
             HttpURLConnection con = (HttpURLConnection) obj.openConnection();
             con.setRequestMethod("POST");
             con.setRequestProperty("Content-Type", "application/soap+xml; charset=utf-8");
