@@ -19,19 +19,14 @@ import java.util.List;
 
 public class VMSLite extends JFrame {
 
-    /**
-	 * */
-	private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
 
-	private static VMSLite instance;
+    private static VMSLite instance;
 
-	private JPanel camerasPanel;
-	
-    private final List<CameraPanel> cameras =
-            new ArrayList<>();
-
-    private final List<Camera> configs =
-            new ArrayList<>();
+    private JPanel camerasPanel;
+    
+    private final List<CameraPanel> cameras = new ArrayList<>();
+    private final List<Camera> configs = new ArrayList<>();
     
     private VMSConfig vmsconfig;
 
@@ -39,39 +34,39 @@ public class VMSLite extends JFrame {
     private Rectangle windowBounds;
 
     private JPanel topBar;
-    private JButton btnFullscreen; // Botão que fica na topBar (modo janela)
-    private JButton btnFullscreenGlass; // Botão que fica flutuando em tela cheia
-    private JPanel glassPanel; // Painel transparente para o GlassPane
+    private JButton btnFullscreen; 
+    private JButton btnFullscreenGlass; 
+    private JPanel glassPanel; 
 
-    private javax.swing.Timer resizeDebounce;
-
-    boolean[][] ocupada;
+    private Timer resizeDebounce;
+    
+    // Gerenciadores do carregamento assíncrono
+    private JPanel mainContainer;
+    private CardLayout cardLayout;
     
     public VMSLite() {
    
-		super("VMS Lite");
-		
-		System.setProperty("sun.java2d.opengl", "true");
-	    System.setProperty("swing.bufferPerWindow", "true");
-	    System.setProperty("sun.java2d.noddraw", "true");
-	    System.setProperty("sun.awt.noerasebackground", "true");
-	    System.setProperty("sun.awt.erasebackgroundonresize", "false");
-	    
-		String basePath = System.getProperty("user.dir");
+        super("VMS Lite");
+        
+        System.setProperty("sun.java2d.opengl", "true");
+        System.setProperty("swing.bufferPerWindow", "true");
+        System.setProperty("sun.java2d.noddraw", "true");
+        System.setProperty("sun.awt.noerasebackground", "true");
+        System.setProperty("sun.awt.erasebackgroundonresize", "false");
+        
+        String basePath = System.getProperty("user.dir");
 
-		// 1. Caminho para quando estiver rodando dentro do Eclipse (Desenvolvimento)
-		NativeLibrary.addSearchPath(
-		    RuntimeUtil.getLibVlcLibraryName(),
-		    basePath + "/vlc"
-		);
+        NativeLibrary.addSearchPath(
+            RuntimeUtil.getLibVlcLibraryName(),
+            basePath + "/vlc"
+        );
 
-		// 2. Caminho para quando estiver rodando pelo .exe do jpackage (Produção)
-		NativeLibrary.addSearchPath(
-		    RuntimeUtil.getLibVlcLibraryName(),
-		    basePath + "/app/vlc"
-		);
-        		
-     	instance = this;
+        NativeLibrary.addSearchPath(
+            RuntimeUtil.getLibVlcLibraryName(),
+            basePath + "/app/vlc"
+        );
+                
+        instance = this;
 
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new java.awt.event.WindowAdapter() {
@@ -80,20 +75,40 @@ public class VMSLite extends JFrame {
                 for (CameraPanel panel : cameras) {
                     panel.stop();
                 }
-                dispose();
-                System.exit(0);
+                
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(300);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                    SwingUtilities.invokeLater(() -> {
+                        dispose();
+                        System.exit(0);
+                    });
+                }).start();
             }
         });
 
         setSize(1400, 900);
         setLocationRelativeTo(null);
-    	vmsconfig = ConfigService.load();
-    	ocupada = new boolean[vmsconfig.getLayoutRows()][vmsconfig.getLayoutCols()];
-    	
+        vmsconfig = ConfigService.load();
+        
+        // 1. Cria a interface estrutural com a tela de "Carregando..." ativa
         createInterface();
-        loadSavedCameras();
 
+        // 2. Torna a janela visível imediatamente para exibir o feedback visual
         setVisible(true);
+        
+        // 3. Processa e popula as câmeras em background sem congelar o visual
+        new Thread(() -> {
+            loadSavedCameras(); 
+            
+            // Com tudo criado na memória e o layout calculado, fazemos a transição na EDT
+            SwingUtilities.invokeLater(() -> {
+                cardLayout.show(mainContainer, "CAMERAS");
+            });
+        }).start();
     }
 
     public boolean isFullscreen() {
@@ -115,8 +130,35 @@ public class VMSLite extends JFrame {
     private void createInterface() {
         FlatDarculaLaf.setup();
         
-        camerasPanel = new JPanel(null); // layout absoluto
-        add(camerasPanel, BorderLayout.CENTER);
+        cardLayout = new CardLayout();
+        mainContainer = new JPanel(cardLayout);
+        
+        // --- Tela de Carregando ---
+        JPanel loadingScreen = new JPanel(new GridBagLayout());
+        loadingScreen.setBackground(new Color(30, 30, 30));
+        JLabel lblStatus = new JLabel("Inicializando motores de vídeo...", SwingConstants.CENTER);
+        lblStatus.setFont(new Font("Segoe UI", Font.BOLD, 16));
+        lblStatus.setForeground(Color.WHITE);
+        
+        JProgressBar progressBar = new JProgressBar();
+        progressBar.setIndeterminate(true); 
+        progressBar.setPreferredSize(new Dimension(300, 15));
+        
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0; gbc.gridy = 0; gbc.insets = new Insets(10,10,10,10);
+        loadingScreen.add(lblStatus, gbc);
+        gbc.gridy = 1;
+        loadingScreen.add(progressBar, gbc);
+        
+        // --- Painel Real das Câmeras ---
+        camerasPanel = new JPanel(null); 
+        
+        mainContainer.add(loadingScreen, "LOADING");
+        mainContainer.add(camerasPanel, "CAMERAS");
+        
+        // Adiciona o container gerenciador no centro do Frame
+        add(mainContainer, BorderLayout.CENTER);
+        cardLayout.show(mainContainer, "LOADING");
 
         camerasPanel.addComponentListener(new ComponentAdapter() {
             @Override
@@ -124,13 +166,13 @@ public class VMSLite extends JFrame {
                 if (resizeDebounce != null) {
                     resizeDebounce.stop();
                 }
-                resizeDebounce = new javax.swing.Timer(80, ev -> rebuildLayout());
+                resizeDebounce = new Timer(80, ev -> rebuildLayout());
                 resizeDebounce.setRepeats(false);
                 resizeDebounce.start();
             }
         });
         
-     // --- Barra Superior (Modo Janela) ---
+        // --- Barra Superior ---
         topBar = new JPanel();
         topBar.setLayout(new BoxLayout(topBar, BoxLayout.X_AXIS));
         topBar.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
@@ -209,10 +251,10 @@ public class VMSLite extends JFrame {
         int yBotao = bounds.y + 15;
 
         if (pontoNaTela.y < bounds.y + 80 && pontoNaTela.x > xBotao - 50) {
-        	btnFullscreenGlass.setBounds(xBotao, yBotao, larguraBotao, 35);
-        	btnFullscreenGlass.setVisible(true);
+            btnFullscreenGlass.setBounds(xBotao, yBotao, larguraBotao, 35);
+            btnFullscreenGlass.setVisible(true);
         } else {
-        	btnFullscreenGlass.setVisible(false);
+            btnFullscreenGlass.setVisible(false);
         }
     }
 
@@ -234,12 +276,18 @@ public class VMSLite extends JFrame {
                 );
 
         if (result == JOptionPane.OK_OPTION) {
-            Camera config = new Camera(
-                            nameField.getText(),
-                            urlField.getText(), Integer.valueOf(linhas.getText()), Integer.valueOf(colunas.getText())
-                    );
-            addCamera(config);
-            saveConfigs();
+            try {
+                int rSpan = linhas.getText().trim().isEmpty() ? 1 : Integer.parseInt(linhas.getText().trim());
+                int cSpan = colunas.getText().trim().isEmpty() ? 1 : Integer.parseInt(colunas.getText().trim());
+                
+                Camera config = new Camera(nameField.getText(), urlField.getText(), rSpan, cSpan);
+                addCamera(config);
+                saveConfigs();
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, 
+                        "Por favor, insira números válidos para linhas e colunas.", 
+                        "Erro de Validação", JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
     
@@ -281,23 +329,49 @@ public class VMSLite extends JFrame {
 
     private void loadSavedCameras() {
         List<Camera> saved = vmsconfig.getCameras();
+        
+        // Adiciona os painéis de forma síncrona dentro da thread paralela
         for (Camera config : saved) {
-            addCamera(config);
+            CameraPanel panel = new CameraPanel(this, config);
+            cameras.add(panel);
+            configs.add(config);
+            
+            // Adições estruturais de componentes Swing precisam ir para o escopo visual com segurança
+            SwingUtilities.invokeLater(() -> camerasPanel.add(panel));
         }
+        
+        // Força a matemática do layout rodar com base nas dimensões atuais calculadas
+        SwingUtilities.invokeLater(this::rebuildLayout);
+        
+        // Inicialização escalonada e suave (Modo Inteligente rodando na EDT)
+        SwingUtilities.invokeLater(() -> {
+            final int[] index = {0};
+            Timer sequentialOpener = new Timer(250, null); 
+            sequentialOpener.addActionListener(e -> {
+                if (index[0] < cameras.size()) {
+                    CameraPanel panel = cameras.get(index[0]);
+                    panel.start();
+                    index[0]++;
+                } else {
+                    sequentialOpener.stop(); 
+                }
+            });
+            sequentialOpener.start();
+        });
     }
 
     public void saveConfigs() {
-    	VMSConfig config = new VMSConfig(
-    	        vmsconfig.getLayoutCols(),
-    	        vmsconfig.getLayoutRows(),
-    	        configs
-    	);
+        VMSConfig config = new VMSConfig(
+                vmsconfig.getLayoutCols(),
+                vmsconfig.getLayoutRows(),
+                configs
+        );
 
-    	try {
-			ConfigService.save(config);
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
+        try {
+            ConfigService.save(config);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public void removeCamera(CameraPanel panel) {
@@ -359,7 +433,6 @@ public class VMSLite extends JFrame {
     }
     
     private void toggleFullscreen() {
-
         if (!fullscreen) {
             windowBounds = getBounds();
 
@@ -378,9 +451,7 @@ public class VMSLite extends JFrame {
             setVisible(true);
 
             fullscreen = true;
-
         } else {
-            // --- SAINDO DE TELA CHEIA ---
             dispose();
             setUndecorated(false);
             setBounds(windowBounds);
@@ -408,7 +479,11 @@ public class VMSLite extends JFrame {
         if (totalW <= 0 || totalH <= 0)
             return;
 
-        boolean[][] ocupado = new boolean[100][100];
+        // Otimização dinâmica de tamanho de matriz sugerida anteriormente
+        int maxGridRows = Math.max(100, rows + 20);
+        int maxGridCols = Math.max(100, cols + 20);
+        boolean[][] ocupado = new boolean[maxGridRows][maxGridCols];
+        
         int maxRowUsada = rows;
         int maxColUsada = cols;
 
@@ -504,30 +579,30 @@ public class VMSLite extends JFrame {
          );
 
          if (result == 0) { 
-    	    try {
-    	        config.setName(nameField.getText());
-    	        config.setUrl(urlField.getText());
-    	        config.setRowSpan(Integer.parseInt(linhasField.getText()));
-    	        config.setColSpan(Integer.parseInt(colunasField.getText()));
+            try {
+                config.setName(nameField.getText());
+                config.setUrl(urlField.getText());
+                config.setRowSpan(Integer.parseInt(linhasField.getText()));
+                config.setColSpan(Integer.parseInt(colunasField.getText()));
 
-    	        saveConfigs();
+                saveConfigs();
 
-    	        if (panel.getConfig() != null) {
-    	            panel.setArrastando(true); 
-    	        }
+                if (panel.getConfig() != null) {
+                    panel.setArrastando(true); 
+                }
 
-    	        rebuildLayout();
+                rebuildLayout();
 
-    	        SwingUtilities.invokeLater(() -> {
-    	            panel.setArrastando(false);
-    	            panel.start(); 
-    	        });
-    	        
-    	    } catch (NumberFormatException ex) {
-    	        JOptionPane.showMessageDialog(this, 
-    	                "Por favor, insira números válidos para linhas e colunas.", 
-    	                "Erro de Validação", JOptionPane.ERROR_MESSAGE);
-    	    }
+                SwingUtilities.invokeLater(() -> {
+                    panel.setArrastando(false);
+                    panel.start(); 
+                });
+                
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, 
+                        "Por favor, insira números válidos para linhas e colunas.", 
+                        "Erro de Validação", JOptionPane.ERROR_MESSAGE);
+            }
 
          } else if (result == 1) {
              int confirmar = JOptionPane.showConfirmDialog(
@@ -584,7 +659,6 @@ public class VMSLite extends JFrame {
                             if (part1 != part2) return Integer.compare(part1, part2);
                         }
                     } catch (Exception e) {
-                        // Fallback silencioso caso encontre um formato inesperado
                     }
                     return 0;
                 });
@@ -613,8 +687,8 @@ public class VMSLite extends JFrame {
                 painelJanela.add(new JLabel("💡 Dica: Segure CTRL para selecionar múltiplas câmeras."), BorderLayout.SOUTH);
 
                 btnRecarregar.addActionListener(ev -> {
-                    java.awt.Component comp = (java.awt.Component) ev.getSource();
-                    java.awt.Window win = SwingUtilities.getWindowAncestor(comp);
+                    Component comp = (Component) ev.getSource();
+                    Window win = SwingUtilities.getWindowAncestor(comp);
                     if (win != null) win.dispose();
                     executarBuscaOnvif(botaoMenu);
                 });
@@ -631,14 +705,19 @@ public class VMSLite extends JFrame {
                     List<String> linhasSelecionadas = deviceList.getSelectedValuesList();
                     if (linhasSelecionadas.isEmpty()) return;
 
-                    br.com.jonmarques.vmslite.service.OnvifDiscoveryService serviceOnvif = new br.com.jonmarques.vmslite.service.OnvifDiscoveryService();
+                    OnvifDiscoveryService serviceOnvif = new OnvifDiscoveryService();
 
-                    for (String linha : linhasSelecionadas) {
-                        String ip = linha.split(" ")[0].trim();
+                    for (String lambdaLinha : linhasSelecionadas) {
+                        String ip = lambdaLinha.split(" ")[0].trim();
                         String modelo = dispositivos.get(ip);
 
                         JTextField userField = new JTextField("admin");
                         JTextField nameField = new JTextField(modelo + " (" + ip + ")");
+                        
+                        // Novos campos para a dimensão do Grid (com valor padrão "1")
+                        JTextField linhasField = new JTextField("1");
+                        JTextField colunasField = new JTextField("1");
+                        
                         String[] streams = {"Mainstream (Alta Resolução)", "Substream (Leve/Fluido)"};
                         JComboBox<String> streamCombo = new JComboBox<>(streams);
 
@@ -661,13 +740,16 @@ public class VMSLite extends JFrame {
                         passPanel.add(passField, BorderLayout.CENTER);
                         passPanel.add(togglePassButton, BorderLayout.EAST);
 
+                        // Inclusão dos campos na interface do diálogo
                         Object[] loginFields = {
                             "Configurar acesso para o dispositivo:",
                             "IP: " + ip + " | Modelo: " + modelo,
                             "\nNome de Exibição no Layout:", nameField,
                             "Usuário da Câmera:", userField,
                             "Senha da Câmera:", passPanel,
-                            "Perfil de Vídeo:", streamCombo
+                            "Perfil de Vídeo:", streamCombo,
+                            "Linhas (Row Span):", linhasField,
+                            "Colunas (Col Span):", colunasField
                         };
 
                         int loginOption = JOptionPane.showConfirmDialog(VMSLite.this, loginFields, 
@@ -679,14 +761,23 @@ public class VMSLite extends JFrame {
                             boolean isSubstream = streamCombo.getSelectedIndex() == 1;
                             String nomeFinal = nameField.getText().trim();
 
+                            // Tratamento seguro da conversão de texto para inteiro
+                            int rSpan = 1;
+                            int cSpan = 1;
+                            try {
+                                rSpan = linhasField.getText().trim().isEmpty() ? 1 : Integer.parseInt(linhasField.getText().trim());
+                                cSpan = colunasField.getText().trim().isEmpty() ? 1 : Integer.parseInt(colunasField.getText().trim());
+                            } catch (NumberFormatException ex) {
+                                // Caso o usuário digite letras, o sistema assume 1x1 silenciosamente para evitar travar o loop
+                            }
+
                             String serviceUrl = dispositivos.get(ip); 
 
                             String rtspUrl = serviceOnvif.obterUrlRtsp(serviceUrl, user, pass, modelo, ip, isSubstream);
 
                             if (rtspUrl != null) {
-                                br.com.jonmarques.vmslite.entity.Camera novaCam = 
-                                        new br.com.jonmarques.vmslite.entity.Camera(nomeFinal, rtspUrl, 1, 1);
-                                
+                                // Criando a nova câmera utilizando os spans informados
+                                Camera novaCam = new Camera(nomeFinal, rtspUrl, rSpan, cSpan);
                                 addCamera(novaCam);
                             } else {
                                 JOptionPane.showMessageDialog(VMSLite.this, 
