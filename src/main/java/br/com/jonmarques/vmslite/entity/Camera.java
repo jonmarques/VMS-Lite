@@ -5,13 +5,10 @@ public class Camera {
     private String url;
     private int rowSpan;
     private int colSpan;
-    private String uuid;
     
     public Camera() {
 		// TODO Auto-generated constructor stub
 	}
-    
-    
     
     public Camera(String name, String url, int rowSpan, int colSpan) {
         this.name = name;
@@ -26,9 +23,6 @@ public class Camera {
         this.rowSpan = 1;
         this.colSpan = 1;
     }
-    
-    public String getUuid() { return uuid; }
-    public void setUuid(String uuid) { this.uuid = uuid; }
     
     public String getName() {
         return name;

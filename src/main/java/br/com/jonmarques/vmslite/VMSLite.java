@@ -48,6 +48,9 @@ public class VMSLite extends JFrame {
    
         super("VMS Lite");
         
+        String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
+        addToStartup("VMSLite", exePath);
+        
         System.setProperty("sun.java2d.opengl", "true");
         System.setProperty("swing.bufferPerWindow", "true");
         System.setProperty("sun.java2d.noddraw", "true");
@@ -109,6 +112,8 @@ public class VMSLite extends JFrame {
                 cardLayout.show(mainContainer, "CAMERAS");
             });
         }).start();
+        
+        toggleFullscreen();
     }
 
     public boolean isFullscreen() {
@@ -358,6 +363,8 @@ public class VMSLite extends JFrame {
             });
             sequentialOpener.start();
         });
+        
+        
     }
 
     public void saveConfigs() {
@@ -791,6 +798,41 @@ public class VMSLite extends JFrame {
                 }
             });
         });
+    }
+    
+    public static void addToStartup(String appName, String exePath) {
+        try {
+            ProcessBuilder check = new ProcessBuilder(
+                    "reg",
+                    "query",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    appName
+            );
+
+            Process p = check.start();
+            int result = p.waitFor();
+
+            if (result == 0) {
+                return; // já existe
+            }
+
+            ProcessBuilder add = new ProcessBuilder(
+                    "reg",
+                    "add",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v", appName,
+                    "/t", "REG_SZ",
+                    "/d", exePath,
+                    "/f"
+            );
+
+            add.start().waitFor();
+            System.out.println("Adicionado ao Startup!");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
     
     public static void main(String[] args) {
