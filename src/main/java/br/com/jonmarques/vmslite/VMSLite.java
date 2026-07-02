@@ -9,7 +9,6 @@ import br.com.jonmarques.vmslite.entity.VMSConfig;
 import br.com.jonmarques.vmslite.service.ConfigService;
 import br.com.jonmarques.vmslite.service.OnvifDiscoveryService;
 import uk.co.caprica.vlcj.binding.support.runtime.RuntimeUtil;
-import uk.co.caprica.vlcj.factory.MediaPlayerFactory;
 
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
@@ -47,8 +46,6 @@ public class VMSLite extends JFrame {
     private javax.swing.Timer resizeDebounce;
 
     boolean[][] ocupada;
-
-	private MediaPlayerFactory factory;
     
     public VMSLite() {
    
@@ -73,30 +70,7 @@ public class VMSLite extends JFrame {
 		    RuntimeUtil.getLibVlcLibraryName(),
 		    basePath + "/app/vlc"
 		);
-		
-        List<String> vlcArgs = new ArrayList<>();
-
-
-     vlcArgs.add("--avcodec-hw=any");
-     vlcArgs.add("--avcodec-threads=2"); 
-     vlcArgs.add("--drop-late-frames"); 
-     vlcArgs.add("--skip-frames");      
-     vlcArgs.add("--network-caching=400");
-     vlcArgs.add("--live-caching=400");
-     vlcArgs.add("--file-caching=400");
-     vlcArgs.add("--clock-jitter=500000");
-     vlcArgs.add("--clock-synchro=1");
-     vlcArgs.add("--rtsp-tcp"); 
-     vlcArgs.add("--no-audio");                
-     vlcArgs.add("--no-video-title-show");     
-     vlcArgs.add("--no-stats");                
-     vlcArgs.add("--quiet");
-     vlcArgs.add("--verbose=-1"); 
-     vlcArgs.add("--avcodec-skiploopfilter=4"); 
-     vlcArgs.add("--avcodec-fast");             
-     vlcArgs.add("--rtsp-frame-buffer-size=2000000");
-        this.factory = new MediaPlayerFactory(vlcArgs);
-		
+        		
      	instance = this;
 
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
@@ -105,9 +79,6 @@ public class VMSLite extends JFrame {
             public void windowClosing(java.awt.event.WindowEvent e) {
                 for (CameraPanel panel : cameras) {
                     panel.stop();
-                }
-                if (factory != null) {
-                    factory.release(); // única liberação da factory compartilhada, aqui
                 }
                 dispose();
                 System.exit(0);
@@ -293,7 +264,7 @@ public class VMSLite extends JFrame {
     }
 
     private void addCamera(Camera config) {
-        CameraPanel panel = new CameraPanel(this, config, factory);
+        CameraPanel panel = new CameraPanel(this, config);
 
         cameras.add(panel);
         configs.add(config);
