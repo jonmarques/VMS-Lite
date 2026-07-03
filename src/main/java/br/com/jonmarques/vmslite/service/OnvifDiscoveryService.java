@@ -25,6 +25,9 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import br.com.jonmarques.vmslite.library.Iphlpapi;
+
 import java.net.URLEncoder;
 
 public class OnvifDiscoveryService {
@@ -81,8 +84,9 @@ public static void discoverDevices(Consumer<Map<String, String>> callback) {
                     
                     if (!dispositivosEncontrados.containsKey(deviceIp)) {
                         System.out.println("Dispositivo ONVIF respondendo no IP: " + deviceIp);
-                        
                         // Tenta extrair a URL de serviço XAddr do XML se disponível, senão usa o IP como valor padrão
+                        
+                        
                         String xaddr = extrairXAddr(response);
                         if (xaddr == null || xaddr.isBlank()) {
                             xaddr = "http://" + deviceIp + "/onvif/device_service";
@@ -306,6 +310,8 @@ private String obterUriStreamOnvif(String serviceUrl, String cabecalhoSeguranca,
         return null;
     }
 
+    System.out.println(response);
+    
     Pattern pattern = Pattern.compile("<[^:>]*:?Uri>([^<]+)</[^:>]*:?Uri>");
     Matcher matcher = pattern.matcher(response);
     if (matcher.find()) {
@@ -356,6 +362,44 @@ private String enviarRequisicaoSoap(String url, String header, String body) {
         }
     } catch (Exception e) {
         System.err.println("Erro de conexão SOAP com o dispositivo: " + e.getMessage());
+        return null;
+    }
+}
+
+public static String getMacAddress(String ip) {
+    try {
+        InetAddress address = InetAddress.getByName(ip);
+
+        byte[] addr = address.getAddress();
+
+        int destIp =
+                ((addr[3] & 0xFF) << 24) |
+                ((addr[2] & 0xFF) << 16) |
+                ((addr[1] & 0xFF) << 8)  |
+                (addr[0] & 0xFF);
+
+        byte[] mac = new byte[6];
+        int[] len = {6};
+
+        int result = Iphlpapi.INSTANCE.SendARP(destIp, 0, mac, len);
+
+        if (result != 0) {
+            return null;
+        }
+
+        StringBuilder sb = new StringBuilder();
+
+        for (int i = 0; i < len[0]; i++) {
+            if (i > 0)
+                sb.append(":");
+
+            sb.append(String.format("%02X", mac[i] & 0xFF));
+        }
+
+        return sb.toString();
+
+    } catch (Exception e) {
+        e.printStackTrace();
         return null;
     }
 }

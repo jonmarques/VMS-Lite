@@ -2,6 +2,8 @@ package br.com.jonmarques.vmslite;
 
 import br.com.jonmarques.vmslite.entity.Camera;
 import br.com.jonmarques.vmslite.listener.GridDragListener;
+import br.com.jonmarques.vmslite.service.OnvifDiscoveryService;
+
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -9,6 +11,9 @@ import java.awt.Point;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import javax.swing.JLabel;
 import javax.swing.JLayeredPane;
 import javax.swing.JPanel;
@@ -30,6 +35,7 @@ public class CameraPanel extends JPanel {
    
    private final Object lifecycleLock = new Object();
    private MediaPlayerEventListener currentListener;
+private VMSLite vmslite;
 
    private static final String[] MEDIA_OPTIONS = new String[]{
 	       // Força o descarte agressivo de frames atrasados para aliviar CPU/GPU
@@ -64,7 +70,9 @@ public class CameraPanel extends JPanel {
 	       // Deixa o VLC escolher aceleração de hardware nativa apenas se for estritamente necessário
 	       ":avcodec-hw=any"
 	   };
+   
    public CameraPanel(final VMSLite vmslite, Camera camera) {
+	   this.vmslite = vmslite;
       this.camera = camera;
       this.setLayout(new BorderLayout());
       
@@ -229,13 +237,32 @@ public class CameraPanel extends JPanel {
                synchronized (lifecycleLock) {
                   if (!this.released && this.reconnecting && this.player.mediaPlayer() != null) {
                      tentativas++;
-                     
-                     // CORREÇÃO CRÍTICA: Se o player engasgar por mais de 2 tentativas seguidas,
-                     // significa que o pipeline nativo travou em um estado corrompido.
-                     // Forçamos uma limpeza rígida do MRL para limpar a sessão RTSP fantasma.
+
                      if (tentativas % 3 == 0) {
                         System.out.println("[VMSLite] Forçando Hard Reset de Mídia Nativa para: " + camera.getName());
                         this.player.mediaPlayer().media().prepare(this.camera.getUrl(), MEDIA_OPTIONS);
+                     } else if (tentativas >= 5 && tentativas % 10 == 0) {
+                        System.out.println("Procurando novo IP para o endereço MAC: " + this.camera.getMac());
+
+                    	 OnvifDiscoveryService.discoverDevices(dispositivos -> {
+                    		 
+                    		 Pattern pattern = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3})");
+                             Matcher matcher = pattern.matcher(this.camera.getUrl());
+                             String ipAntigo = matcher.find() ? matcher.group(1) : null;
+                             
+                    		 for (String ip : dispositivos.keySet()) {
+                    			 String mac = OnvifDiscoveryService.getMacAddress(ip);
+
+                    			 if (mac.equalsIgnoreCase(this.camera.getMac())) {
+                    			     System.out.println("Novo IP '" + ip + "' para o MAC '" + mac + "' encontrado!");
+                    			     String novoUrl = this.camera.getUrl().replace(ipAntigo, ip);
+                    				 this.camera.setUrl(novoUrl);
+                                     this.player.mediaPlayer().media().prepare(novoUrl, MEDIA_OPTIONS);
+                    				 vmslite.saveConfigs();
+                    				 break;
+                    			 }
+                    		 }
+                    	 });
                      }
                      
                      // Bate o play com os argumentos extraídos do executável antigo

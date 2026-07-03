@@ -2,6 +2,7 @@ package br.com.jonmarques.vmslite.entity;
 public class Camera {
 
     private String name;
+	private String mac;
     private String url;
     private int rowSpan;
     private int colSpan;
@@ -57,6 +58,12 @@ public class Camera {
 		this.colSpan = colSpan;
 	}
     
+    public String getMac() {
+		return mac;
+	}
     
+    public void setMac(String mac) {
+		this.mac = mac;
+	}
     
 }
