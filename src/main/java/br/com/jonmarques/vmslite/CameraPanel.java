@@ -11,8 +11,6 @@ import java.awt.Point;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import javax.swing.JLabel;
 import javax.swing.JLayeredPane;
@@ -35,7 +33,7 @@ public class CameraPanel extends JPanel {
    
    private final Object lifecycleLock = new Object();
    private MediaPlayerEventListener currentListener;
-private VMSLite vmslite;
+   private VMSLite vmslite;
 
    private static final String[] MEDIA_OPTIONS = new String[]{
 	       // Força o descarte agressivo de frames atrasados para aliviar CPU/GPU
@@ -205,77 +203,79 @@ private VMSLite vmslite;
       
       synchronized (lifecycleLock) {
          if (!this.released) {
-            this.player.mediaPlayer().media().play(this.camera.getUrl());
-         }
+        	 this.player.mediaPlayer().media().play(this.camera.getUrl(), MEDIA_OPTIONS);
+        }
       }
    }
 
    private void reconnect() {
-      if (this.reconnecting || this.released) {
-         return;
-      }
-      this.reconnecting = true;
+	   if (this.reconnecting || this.released) {
+	      return;
+	   }
+	   this.reconnecting = true;
 
-      new Thread(() -> {
-         int tentativas = 0;
-         while (this.reconnecting && !this.released) {
-            try {
-               if (!esperarComPolling(5000)) break;
-               if (this.released) break;
+	   new Thread(() -> {
+	      int tentativas = 0;
+	      while (this.reconnecting && !this.released) {
+	         try {
+	            if (!esperarComPolling(5000)) break;
+	            if (this.released) break;
 
-               SwingUtilities.invokeLater(() -> {
-                  if (!this.released) {
-                     this.loadingLabel.setVisible(true);
-                     this.loadingLabel.setText("Reconectando...");
-                  }
-               });
+	            SwingUtilities.invokeLater(() -> {
+	               if (!this.released) {
+	                  this.loadingLabel.setVisible(true);
+	                  this.loadingLabel.setText("Reconectando...");
+	               }
+	            });
 
-               if (!this.isDisplayable() || this.released) {
-                  continue;
-               }
+	            if (!this.isDisplayable() || this.released) {
+	               continue;
+	            }
 
-               synchronized (lifecycleLock) {
-                  if (!this.released && this.reconnecting && this.player.mediaPlayer() != null) {
-                     tentativas++;
+	            synchronized (lifecycleLock) {
+	               if (!this.released && this.reconnecting && this.player.mediaPlayer() != null) {
+	                  tentativas++;
 
-                     if (tentativas % 3 == 0) {
-                        System.out.println("[VMSLite] Forçando Hard Reset de Mídia Nativa para: " + camera.getName());
-                        this.player.mediaPlayer().media().prepare(this.camera.getUrl(), MEDIA_OPTIONS);
-                     } else if (tentativas >= 5 && tentativas % 10 == 0) {
-                        System.out.println("Procurando novo IP para o endereço MAC: " + this.camera.getMac());
+	                  if (tentativas % 3 == 0) {
+	                     System.out.println("[VMSLite] Forçando Hard Reset de Mídia Nativa para: " + camera.getName());
+	                     this.player.mediaPlayer().media().prepare(this.camera.getUrl(), MEDIA_OPTIONS);
+	                  } else if (tentativas >= 5 && tentativas % 10 == 0) {
 
-                    	 OnvifDiscoveryService.discoverDevices(dispositivos -> {
-                    		 
-                    		 Pattern pattern = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3})");
-                             Matcher matcher = pattern.matcher(this.camera.getUrl());
-                             String ipAntigo = matcher.find() ? matcher.group(1) : null;
-                             
-                    		 for (String ip : dispositivos.keySet()) {
-                    			 String mac = OnvifDiscoveryService.getMacAddress(ip);
+	                	    OnvifDiscoveryService.discoverDevices(dispositivos -> {
 
-                    			 if (mac.equalsIgnoreCase(this.camera.getMac())) {
-                    			     System.out.println("Novo IP '" + ip + "' para o MAC '" + mac + "' encontrado!");
-                    			     String novoUrl = this.camera.getUrl().replace(ipAntigo, ip);
-                    				 this.camera.setUrl(novoUrl);
-                                     this.player.mediaPlayer().media().prepare(novoUrl, MEDIA_OPTIONS);
-                    				 vmslite.saveConfigs();
-                    				 break;
-                    			 }
-                    		 }
-                    	 });
-                     }
-                     
-                     // Bate o play com os argumentos extraídos do executável antigo
-                     this.player.mediaPlayer().media().play(this.camera.getUrl(), MEDIA_OPTIONS);
-                  }
-               }
+	                	        String uuidSalvo = this.camera.getUuid();
+	                	        String ipAntigo = OnvifDiscoveryService.extrairIpDaUrl(this.camera.getUrl());
+	                	        String ipEncontrado = OnvifDiscoveryService.encontrarIpPorUuid(dispositivos, uuidSalvo);
 
-            } catch (Exception e) {
-               // Protege a execução da thread em background contra quebras de ponteiro
-            }
-         }
-      }, "Reconnect-" + this.camera.getName()).start();
-   }
+	                	        if (ipEncontrado != null && ipAntigo != null && !ipAntigo.equals(ipEncontrado)) {
+	                	            System.out.println("Novo IP '" + ipEncontrado + "' encontrado para: " + this.camera.getName());
+
+	                	            String novoUrl = OnvifDiscoveryService.substituirIpNaUrl(this.camera.getUrl(), ipEncontrado);
+	                	            this.camera.setUrl(novoUrl);
+
+	                	            synchronized (lifecycleLock) {
+	                	                if (!this.released && this.player.mediaPlayer() != null) {
+	                	                    this.player.mediaPlayer().media().prepare(novoUrl, MEDIA_OPTIONS);
+	                	                }
+	                	            }
+	                	            vmslite.saveConfigs();
+	                	        } else if (ipEncontrado == null) {
+	                	            System.out.println("Não foi possível localizar a câmera '" + this.camera.getName() + "' na rede (via UUID).");
+	                	        }
+	                	    });
+	                	}
+	                  
+
+	                  this.player.mediaPlayer().media().play(this.camera.getUrl(), MEDIA_OPTIONS);
+	               }
+	            }
+
+	         } catch (Exception e) {
+	            // Protege a execução da thread em background contra quebras de ponteiro
+	         }
+	      }
+	   }, "Reconnect-" + this.camera.getName()).start();
+	}
 
    private boolean esperarComPolling(long totalMs) {
       long restante = totalMs;

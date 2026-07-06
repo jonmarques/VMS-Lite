@@ -16,6 +16,8 @@ import java.awt.event.ComponentEvent;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -297,103 +299,88 @@ public class VMSLite extends JFrame {
 
 	private void loadSavedCameras() {
 
-		List<Camera> saved = vmsconfig.getCameras();
-		Pattern pattern = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3})");
+	    List<Camera> saved = vmsconfig.getCameras();
 
-		lblStatus.setText("Carregando e atualizando configurações...");
+	    lblStatus.setText("Carregando e atualizando configurações...");
 
-		OnvifDiscoveryService.discoverDevices(dispositivos -> {
+	    OnvifDiscoveryService.discoverDevices(dispositivos -> {
 
-			boolean necessarioSalvar = false;
+	        boolean necessarioSalvar = false;
 
-			for (Camera config : saved) {
+	        for (Camera config : saved) {
 
-				Matcher matcher = pattern.matcher(config.getUrl());
-				String ip = matcher.find() ? matcher.group(1) : null;
+	            String ip = OnvifDiscoveryService.extrairIpDaUrl(config.getUrl());
 
-				String macAtual = ip == null ? null : OnvifDiscoveryService.getMacAddress(ip);
+	            // Se ainda não tem UUID salvo, tenta capturar agora pelo IP atual
+	            if ((config.getUuid() == null || config.getUuid().isBlank()) && ip != null && dispositivos.containsKey(ip)) {
 
-				// Ainda não possui MAC salvo
-				if (config.getMac() == null || config.getMac().isBlank()) {
+	                String uuidAtual = dispositivos.get(ip).getUuid();
+	                if (uuidAtual != null) {
+	                    config.setUuid(uuidAtual);
+	                    System.out.println("UUID ONVIF salvo para '" + config.getName() + "'.");
+	                    necessarioSalvar = true;
+	                }
+	            }
 
-					if (macAtual != null && !macAtual.isBlank()) {
-						config.setMac(macAtual);
-						System.out.println("Foi inserido endereço MAC '" + macAtual +
-								"' para Camera '" + config.getName() + "'.");
-						necessarioSalvar = true;
-					}
+	            // Se o IP salvo não está mais respondendo na varredura atual, tenta achar pelo UUID
+	            boolean ipAindaAtivo = ip != null && dispositivos.containsKey(ip);
 
-				} else {
+	            if (!ipAindaAtivo && config.getUuid() != null && !config.getUuid().isBlank()) {
+	                String ipCandidato = OnvifDiscoveryService.encontrarIpPorUuid(dispositivos, config.getUuid());
 
-					// O MAC do IP atual não bate com o MAC salvo
-					if (macAtual == null || !config.getMac().equalsIgnoreCase(macAtual)) {
+	                if (ipCandidato != null) {
+	                    String novoUrl = OnvifDiscoveryService.substituirIpNaUrl(config.getUrl(), ipCandidato);
+	                    config.setUrl(novoUrl);
+	                    System.out.println("IP da câmera '" + config.getName() + "' alterado para " + ipCandidato + " (via UUID)");
+	                    necessarioSalvar = true;
+	                }
+	            }
 
-						for (String ipOnvif : dispositivos.keySet()) {
+	            System.out.println("Camera iniciada: "
+	                    + config.getUrl()
+	                    + " uuid: "
+	                    + config.getUuid());
 
-							String macEncontrado = OnvifDiscoveryService.getMacAddress(ipOnvif);
+	            CameraPanel panel = new CameraPanel(this, config);
 
-							if (macEncontrado != null &&
-									macEncontrado.equalsIgnoreCase(config.getMac())) {
+	            cameras.add(panel);
+	            configs.add(config);
 
-								config.setUrl(config.getUrl().replace(ip, ipOnvif));
+	            SwingUtilities.invokeLater(() -> camerasPanel.add(panel));
+	        }
 
-								System.out.println("IP da câmera '" + config.getName()
-								+ "' alterado para " + ipOnvif);
+	        if (necessarioSalvar) {
+	            saveConfigs();
+	        }
 
-								necessarioSalvar = true;
-								break;
-							}
-						}
-					}
-				}
+	        SwingUtilities.invokeLater(() -> {
+	            lblStatus.setText("Carregando video das cameras...");
+	            rebuildLayout();
+	        });
 
-				System.out.println("Camera iniciada: "
-						+ config.getUrl()
-						+ " mac: "
-						+ config.getMac());
+	        SwingUtilities.invokeLater(() -> {
 
-				CameraPanel panel = new CameraPanel(this, config);
+	            final int[] index = {0};
 
-				cameras.add(panel);
-				configs.add(config);
+	            Timer sequentialOpener = new Timer(250, null);
 
-				SwingUtilities.invokeLater(() -> camerasPanel.add(panel));
-			}
+	            sequentialOpener.addActionListener(e -> {
+	                if (index[0] < cameras.size()) {
+	                    cameras.get(index[0]).start();
+	                    index[0]++;
+	                } else {
+	                    sequentialOpener.stop();
+	                }
+	            });
 
-			if (necessarioSalvar) {
-				saveConfigs();
-			}
+	            sequentialOpener.start();
 
-			SwingUtilities.invokeLater(() -> {
-				lblStatus.setText("Carregando video das cameras...");
-				rebuildLayout();
-			});
+	        });
+	        SwingUtilities.invokeLater(() -> {
+	            cardLayout.show(mainContainer, "CAMERAS");
+	        });
 
-			SwingUtilities.invokeLater(() -> {
-
-				final int[] index = {0};
-
-				Timer sequentialOpener = new Timer(250, null);
-
-				sequentialOpener.addActionListener(e -> {
-					if (index[0] < cameras.size()) {
-						cameras.get(index[0]).start();
-						index[0]++;
-					} else {
-						sequentialOpener.stop();
-					}
-				});
-
-				sequentialOpener.start();
-
-			});
-			SwingUtilities.invokeLater(() -> {
-				cardLayout.show(mainContainer, "CAMERAS");
-			});
-
-		});
-
-
+	    });
 	}
 
 	public void saveConfigs() {
@@ -421,69 +408,81 @@ public class VMSLite extends JFrame {
 	}
 
 	private void importarConfig() {
-		JFileChooser chooser = new JFileChooser();
-		if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION)
-			return;
-		cardLayout.show(mainContainer, "LOADING");
-		lblStatus.setText("Importando configuração...");
-		
-		new Thread(() -> {
-			try {
+	    JFileChooser chooser = new JFileChooser();
+	    if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION)
+	        return;
+	    cardLayout.show(mainContainer, "LOADING");
+	    lblStatus.setText("Importando configuração...");
 
-				File selectedFile = chooser.getSelectedFile();
-				VMSConfig config = ConfigService.loadFromFile(selectedFile);
-				ConfigService.save(config);
+	    new Thread(() -> {
+	        try {
 
-				for (CameraPanel oldPanel : cameras) {
-					oldPanel.stop();
-				}
+	            File selectedFile = chooser.getSelectedFile();
+	            VMSConfig config = ConfigService.loadFromFile(selectedFile);
+	            ConfigService.save(config);
 
-				cameras.clear();
-				configs.clear();
-				camerasPanel.removeAll();
+	            for (CameraPanel oldPanel : cameras) {
+	                oldPanel.stop();
+	            }
 
-				vmsconfig.setLayoutRows(config.getLayoutRows());
-				vmsconfig.setLayoutCols(config.getLayoutCols());
+	            cameras.clear();
+	            configs.clear();
+	            camerasPanel.removeAll();
 
-				boolean necessarioSalvar = false;
+	            vmsconfig.setLayoutRows(config.getLayoutRows());
+	            vmsconfig.setLayoutCols(config.getLayoutCols());
 
-				for (Camera cam : config.getCameras()) {
-					addCamera(cam);
-					if (cam.getMac() == null || cam.getMac().isEmpty()) {
-						Pattern pattern = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3})");
-						Matcher matcher = pattern.matcher(cam.getUrl());
-						String ip = matcher.find() ? matcher.group(1) : null;
+	            lblStatus.setText("Buscando dispositivos ONVIF para atualizar UUIDs...");
 
-						String mac = OnvifDiscoveryService.getMacAddress(ip);
-						if (mac != null && !mac.isEmpty()) {
-							cam.setMac(mac);
-							System.out.println("Foi inserido endereço MAC '" + mac + "' para Camera '" + cam.getName() + "'.");
-							necessarioSalvar = true;
-						}
-					} 
+	            CountDownLatch latch = new CountDownLatch(1);
+	            Map<String, OnvifDiscoveryService.DeviceInfo>[] resultado = new Map[1];
 
-				}
+	            OnvifDiscoveryService.discoverDevices(dispositivos -> {
+	                resultado[0] = dispositivos;
+	                latch.countDown();
+	            });
 
-				if (necessarioSalvar) {
-					saveConfigs();
-				}
+	            latch.await();
+	            Map<String, OnvifDiscoveryService.DeviceInfo> dispositivos = resultado[0];
 
-				rebuildLayout();
-				
-				SwingUtilities.invokeLater(() -> {
-				    cardLayout.show(mainContainer, "CAMERAS");
-				});
-			} catch (Exception ex) {
-				ex.printStackTrace();
-			} finally {
-		        SwingUtilities.invokeLater(() -> {
-		            rebuildLayout();
-		            cardLayout.show(mainContainer, "CAMERAS");
-		        });
-		    }
-		}).start();
-		
+	            boolean necessarioSalvar = false;
 
+	            for (Camera cam : config.getCameras()) {
+
+	                if (cam.getUuid() == null || cam.getUuid().isBlank()) {
+	                    String ip = OnvifDiscoveryService.extrairIpDaUrl(cam.getUrl());
+
+	                    if (ip != null && dispositivos.containsKey(ip)) {
+	                        String uuid = dispositivos.get(ip).getUuid();
+	                        if (uuid != null) {
+	                            cam.setUuid(uuid);
+	                            System.out.println("UUID ONVIF '" + uuid + "' salvo para Câmera importada '" + cam.getName() + "'.");
+	                            necessarioSalvar = true;
+	                        }
+	                    }
+	                }
+
+	                addCamera(cam);
+	            }
+
+	            if (necessarioSalvar) {
+	                saveConfigs();
+	            }
+
+	            rebuildLayout();
+
+	            SwingUtilities.invokeLater(() -> {
+	                cardLayout.show(mainContainer, "CAMERAS");
+	            });
+	        } catch (Exception ex) {
+	            ex.printStackTrace();
+	        } finally {
+	            SwingUtilities.invokeLater(() -> {
+	                rebuildLayout();
+	                cardLayout.show(mainContainer, "CAMERAS");
+	            });
+	        }
+	    }).start();
 	}
 
 	private void exportarConfig() {
@@ -652,48 +651,30 @@ public class VMSLite extends JFrame {
 		if (result == 0) { 
 
 			if (!urlField.getText().equals(config.getUrl())) {
-				try {
-					config.setName(nameField.getText());
-					config.setUrl(urlField.getText());
-					config.setRowSpan(Integer.parseInt(linhasField.getText()));
-					config.setColSpan(Integer.parseInt(colunasField.getText()));
+			    try {
+			        config.setName(nameField.getText());
+			        config.setUrl(urlField.getText());
+			        config.setRowSpan(Integer.parseInt(linhasField.getText()));
+			        config.setColSpan(Integer.parseInt(colunasField.getText()));
 
-					Pattern pattern = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3})");
+			        saveConfigs();
 
-					Matcher matcher = pattern.matcher(config.getUrl());
-					String ip = matcher.find() ? matcher.group(1) : null;
+			        if (panel.getConfig() != null) {
+			            panel.setArrastando(true);
+			        }
 
-					Matcher matcher2 = pattern.matcher(urlField.getText());
-					String ip2 = matcher2.find() ? matcher2.group(1) : null;
+			        rebuildLayout();
 
-					if (ip != null || ip2 != null || ip != ip2) {
-						String mac = OnvifDiscoveryService.getMacAddress(ip2);
-						if (mac != null && !config.getMac().equalsIgnoreCase(mac)) {
-							config.setMac(mac);
-							System.out.println("Endereço MAC da Camera " + config.getName() + " foi alterado para " + config.getMac());
-						} else {
-							System.out.println("Endereço MAC da Camera " + config.getName() + " não encontrado ou é o mesmo após alteração de IP para " + ip2);
-						}
-					}
+			        SwingUtilities.invokeLater(() -> {
+			            panel.setArrastando(false);
+			            panel.start();
+			        });
 
-					saveConfigs();
-
-					if (panel.getConfig() != null) {
-						panel.setArrastando(true); 
-					}
-
-					rebuildLayout();
-
-					SwingUtilities.invokeLater(() -> {
-						panel.setArrastando(false);
-						panel.start(); 
-					});
-
-				} catch (NumberFormatException ex) {
-					JOptionPane.showMessageDialog(this, 
-							"Por favor, insira números válidos para linhas e colunas.", 
-							"Erro de Validação", JOptionPane.ERROR_MESSAGE);
-				}
+			    } catch (NumberFormatException ex) {
+			        JOptionPane.showMessageDialog(this,
+			                "Por favor, insira números válidos para linhas e colunas.",
+			                "Erro de Validação", JOptionPane.ERROR_MESSAGE);
+			    }
 			}
 
 		} else if (result == 1) {
@@ -713,7 +694,7 @@ public class VMSLite extends JFrame {
 	private void executarBuscaOnvif(JButton botaoMenu) {
 		botaoMenu.setEnabled(false);
 		botaoMenu.setText("Escaneando Rede...");
-		
+
 		JDialog loadingDialog = new JDialog(this, "Aguarde", Dialog.ModalityType.MODELESS);
 		loadingDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
 		loadingDialog.setResizable(false);
@@ -731,12 +712,12 @@ public class VMSLite extends JFrame {
 		loadingDialog.pack();
 		loadingDialog.setLocationRelativeTo(this);
 		loadingDialog.setVisible(true);
-		
+
 		OnvifDiscoveryService.discoverDevices(dispositivos -> {
 			SwingUtilities.invokeLater(() -> {
-				
-		        loadingDialog.dispose();
-				
+
+				loadingDialog.dispose();
+
 				botaoMenu.setEnabled(true);
 				botaoMenu.setText("Buscar ONVIF 🔍");
 
@@ -761,6 +742,8 @@ public class VMSLite extends JFrame {
 						ipsFiltrados.add(ip);
 					}
 				}
+				
+				
 
 				ipsFiltrados.sort((ip1, ip2) -> {
 					try {
@@ -779,10 +762,10 @@ public class VMSLite extends JFrame {
 
 				DefaultListModel<String> listModel = new DefaultListModel<>();
 				for (String ip : ipsFiltrados) {
-					String mactry = OnvifDiscoveryService.getMacAddress(ip);
-					String mac = mactry == null || mactry.isEmpty() ? "Sem MAC Vísivel" : mactry;
+				    String uuid = dispositivos.get(ip).getUuid();
+				    String uuidExibicao = (uuid == null || uuid.isBlank()) ? "Sem UUID Visível" : uuid;
 
-					listModel.addElement(ip + "  - [" + mac + "]");
+				    listModel.addElement(ip + "  - [" + uuidExibicao + "]");
 				}
 
 				JList<String> deviceList = new JList<>(listModel);
@@ -825,10 +808,9 @@ public class VMSLite extends JFrame {
 					OnvifDiscoveryService serviceOnvif = new OnvifDiscoveryService();
 
 					for (String lambdaLinha : linhasSelecionadas) {
-						String ip = lambdaLinha.split(" ")[0].trim();
-						String mactry = OnvifDiscoveryService.getMacAddress(ip);
-						String mac = mactry == null || mactry.isEmpty() ? "Sem MAC Vísivel" : mactry;
-						String modelo = dispositivos.get(ip);
+					    String ip = lambdaLinha.split(" ")[0].trim();
+					    String uuid = dispositivos.get(ip).getUuid();
+					    String modelo = dispositivos.get(ip).getXaddr();
 
 						JTextField userField = new JTextField("admin");
 						JTextField nameField = new JTextField(modelo + " (" + ip + ")");
@@ -862,7 +844,7 @@ public class VMSLite extends JFrame {
 						// Inclusão dos campos na interface do diálogo
 						Object[] loginFields = {
 								"Configurar acesso para o dispositivo:",
-								"IP: " + ip + " | Modelo: " + modelo + " | MAC: " + mac,
+								"IP: " + ip + " | Modelo: " + modelo,
 								"\nNome de Exibição no Layout:", nameField,
 								"Usuário da Câmera:", userField,
 								"Senha da Câmera:", passPanel,
@@ -890,20 +872,17 @@ public class VMSLite extends JFrame {
 								// Caso o usuário digite letras, o sistema assume 1x1 silenciosamente para evitar travar o loop
 							}
 
-							String serviceUrl = dispositivos.get(ip); 
-
+							String serviceUrl = dispositivos.get(ip).getXaddr();
 							String rtspUrl = serviceOnvif.obterUrlRtsp(serviceUrl, user, pass, modelo, ip, isSubstream);
 
 							if (rtspUrl != null) {
-								// Criando a nova câmera utilizando os spans informados
-								Camera novaCam = new Camera(nomeFinal, rtspUrl, rSpan, cSpan);
-								novaCam.setMac(OnvifDiscoveryService.getMacAddress(ip));
-								addCamera(novaCam);
-							} else {
-								JOptionPane.showMessageDialog(VMSLite.this, 
-										"Não foi possível obter a URL RTSP. Verifique usuário/senha.", 
-										"Erro de Conexão", JOptionPane.ERROR_MESSAGE);
-							}
+					            Camera novaCam = new Camera(nomeFinal, rtspUrl, uuid, rSpan, cSpan);
+					            addCamera(novaCam);
+					        } else {
+					            JOptionPane.showMessageDialog(VMSLite.this,
+					                    "Não foi possível obter a URL RTSP. Verifique usuário/senha.",
+					                    "Erro de Conexão", JOptionPane.ERROR_MESSAGE);
+					        }
 						}
 					}
 					rebuildLayout();

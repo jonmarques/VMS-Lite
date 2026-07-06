@@ -2,23 +2,23 @@ package br.com.jonmarques.vmslite.entity;
 public class Camera {
 
     private String name;
-	private String mac;
     private String url;
     private int rowSpan;
     private int colSpan;
-    
+    private String uuid;
+
     public Camera() {
 		// TODO Auto-generated constructor stub
 	}
     
-    public Camera(String name, String url, int rowSpan, int colSpan) {
+    public Camera(String name, String url, String uuid, int rowSpan, int colSpan) {
         this.name = name;
         this.url = url;
         this.rowSpan = rowSpan;
         this.colSpan = colSpan;
     }
 
-    public Camera(String name, String url) {
+    public Camera(String name, String url, String uuid) {
         this.name = name;
         this.url = url;
         this.rowSpan = 1;
@@ -58,12 +58,11 @@ public class Camera {
 		this.colSpan = colSpan;
 	}
     
-    public String getMac() {
-		return mac;
+    public String getUuid() {
+		return uuid;
 	}
     
-    public void setMac(String mac) {
-		this.mac = mac;
+    public void setUuid(String uuid) {
+		this.uuid = uuid;
 	}
-    
 }
