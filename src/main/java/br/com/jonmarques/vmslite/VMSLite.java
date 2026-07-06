@@ -18,8 +18,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class VMSLite extends JFrame {
 
@@ -53,6 +51,12 @@ public class VMSLite extends JFrame {
 
 		super("VMS Lite");
 
+	    if (!SingleInstance.lock()) {
+	        System.exit(0);
+	    }
+
+	    Runtime.getRuntime().addShutdownHook(new Thread(SingleInstance::unlock));
+		
 		String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
 		addToStartup("VMSLite", exePath);
 
@@ -435,7 +439,7 @@ public class VMSLite extends JFrame {
 	            lblStatus.setText("Buscando dispositivos ONVIF para atualizar UUIDs...");
 
 	            CountDownLatch latch = new CountDownLatch(1);
-	            Map<String, OnvifDiscoveryService.DeviceInfo>[] resultado = new Map[1];
+				Map<String, OnvifDiscoveryService.DeviceInfo>[] resultado = new Map[1];
 
 	            OnvifDiscoveryService.discoverDevices(dispositivos -> {
 	                resultado[0] = dispositivos;

@@ -36,38 +36,24 @@ public class CameraPanel extends JPanel {
    private VMSLite vmslite;
 
    private static final String[] MEDIA_OPTIONS = new String[]{
-	       // Força o descarte agressivo de frames atrasados para aliviar CPU/GPU
 	       ":drop-late-frames", 
 	       ":skip-frames", 
 	       ":framedrop",
 	       
-	       // Reduz a fidelidade da decodificação (ignora blocos não essenciais)
 	       ":avcodec-fast", 
-	       ":avcodec-skiploopfilter=4", // Pula o filtro de linha (deblocking) - economiza muita CPU
-	       ":avcodec-skipframe=1",      // Pula frames não-referência (B-Frames) se a CPU engasgar
-	       ":avcodec-threads=1",        // Substream é leve, 1 thread por câmera basta (evita sobrecarga de threads no Java)
+	       ":avcodec-skiploopfilter=4", 
+	       ":rtsp-tcp",
 	       
-	       // Desativa processamentos visuais secundários do VLC
-	       ":no-audio", 
-	       ":no-video-title-show", 
-	       ":no-stats", 
-	       ":quiet", 
-	       ":verbose=-1", 
+	       ":no-video-title-show",  
 	       
-	       // Protocolo de rede direto e buffers magros para o Substream
-	       ":rtsp-tcp", 
-	       ":network-caching=300", 
-	       ":live-caching=300", 
-	       ":file-caching=300", 
-	       ":rtsp-frame-buffer-size=500000", // Reduzido de 2MB para 500KB (Substream não precisa de buffers gigantes na RAM)
+	       ":network-caching=1000", 
+	       ":live-caching=1000", 
 	       
-	       // Gerenciamento de tempo interno
-	       ":clock-synchro=1", 
+	       ":clock-synchro=0",
 	       ":clock-jitter=0",
 	       
-	       // Deixa o VLC escolher aceleração de hardware nativa apenas se for estritamente necessário
 	       ":avcodec-hw=any"
-	   };
+	       };
    
    public CameraPanel(final VMSLite vmslite, Camera camera) {
 	   this.vmslite = vmslite;
@@ -75,7 +61,7 @@ public class CameraPanel extends JPanel {
       this.setLayout(new BorderLayout());
       
       this.player = new CallbackMediaPlayerComponent();
-      
+      this.player.mediaPlayer().audio().setMute(true);
       this.loadingLabel = new JLabel("Carregando...", 0);
       this.loadingLabel.setOpaque(true);
       this.loadingLabel.setBackground(Color.BLACK);
