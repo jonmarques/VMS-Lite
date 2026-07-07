@@ -22,6 +22,7 @@ import java.util.concurrent.CountDownLatch;
 public class VMSLite extends JFrame {
 
 	private static final long serialVersionUID = 1L;
+	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
 
 	private static VMSLite instance;
 
@@ -285,7 +286,17 @@ public class VMSLite extends JFrame {
 		}
 	}
 
-	private void addCamera(Camera config) {
+	private CameraPanel addCameraPanel(Camera config) {
+		if (!SwingUtilities.isEventDispatchThread()) {
+			final CameraPanel[] panel = new CameraPanel[1];
+			try {
+				SwingUtilities.invokeAndWait(() -> panel[0] = addCameraPanel(config));
+			} catch (Exception e) {
+				throw new IllegalStateException("Erro ao adicionar camera na interface", e);
+			}
+			return panel[0];
+		}
+
 		CameraPanel panel = new CameraPanel(this, config);
 
 		cameras.add(panel);
@@ -293,7 +304,11 @@ public class VMSLite extends JFrame {
 		camerasPanel.add(panel);
 
 		rebuildLayout();
+		return panel;
+	}
 
+	private void addCamera(Camera config) {
+		CameraPanel panel = addCameraPanel(config);
 		SwingUtilities.invokeLater(() -> {
 			if (panel.isDisplayable()) {
 				panel.start();
@@ -305,7 +320,7 @@ public class VMSLite extends JFrame {
 
 	    List<Camera> saved = vmsconfig.getCameras();
 
-	    lblStatus.setText("Carregando e atualizando configurações...");
+	    SwingUtilities.invokeLater(() -> lblStatus.setText("Carregando e atualizando configurações..."));
 
 	    OnvifDiscoveryService.discoverDevices(dispositivos -> {
 
@@ -321,7 +336,7 @@ public class VMSLite extends JFrame {
 	                String uuidAtual = dispositivos.get(ip).getUuid();
 	                if (uuidAtual != null) {
 	                    config.setUuid(uuidAtual);
-	                    System.out.println("UUID ONVIF salvo para '" + config.getName() + "'.");
+	                    logDebug("UUID ONVIF salvo para '" + config.getName() + "'.");
 	                    necessarioSalvar = true;
 	                }
 	            }
@@ -335,22 +350,17 @@ public class VMSLite extends JFrame {
 	                if (ipCandidato != null) {
 	                    String novoUrl = OnvifDiscoveryService.substituirIpNaUrl(config.getUrl(), ipCandidato);
 	                    config.setUrl(novoUrl);
-	                    System.out.println("IP da câmera '" + config.getName() + "' alterado para " + ipCandidato + " (via UUID)");
+	                    logDebug("IP da camera '" + config.getName() + "' alterado para " + ipCandidato + " (via UUID)");
 	                    necessarioSalvar = true;
 	                }
 	            }
 
-	            System.out.println("Camera iniciada: "
+	            logDebug("Camera iniciada: "
 	                    + config.getUrl()
 	                    + " uuid: "
 	                    + config.getUuid());
 
-	            CameraPanel panel = new CameraPanel(this, config);
-
-	            cameras.add(panel);
-	            configs.add(config);
-
-	            SwingUtilities.invokeLater(() -> camerasPanel.add(panel));
+	            addCameraPanel(config);
 	        }
 
 	        if (necessarioSalvar) {
@@ -425,18 +435,20 @@ public class VMSLite extends JFrame {
 	            VMSConfig config = ConfigService.loadFromFile(selectedFile);
 	            ConfigService.save(config);
 
-	            for (CameraPanel oldPanel : cameras) {
-	                oldPanel.stop();
-	            }
+	            SwingUtilities.invokeAndWait(() -> {
+	                for (CameraPanel oldPanel : cameras) {
+	                    oldPanel.stop();
+	                }
 
-	            cameras.clear();
-	            configs.clear();
-	            camerasPanel.removeAll();
+	                cameras.clear();
+	                configs.clear();
+	                camerasPanel.removeAll();
+	            });
 
 	            vmsconfig.setLayoutRows(config.getLayoutRows());
 	            vmsconfig.setLayoutCols(config.getLayoutCols());
 
-	            lblStatus.setText("Buscando dispositivos ONVIF para atualizar UUIDs...");
+	            SwingUtilities.invokeLater(() -> lblStatus.setText("Buscando dispositivos ONVIF para atualizar UUIDs..."));
 
 	            CountDownLatch latch = new CountDownLatch(1);
 				Map<String, OnvifDiscoveryService.DeviceInfo>[] resultado = new Map[1];
@@ -460,7 +472,7 @@ public class VMSLite extends JFrame {
 	                        String uuid = dispositivos.get(ip).getUuid();
 	                        if (uuid != null) {
 	                            cam.setUuid(uuid);
-	                            System.out.println("UUID ONVIF '" + uuid + "' salvo para Câmera importada '" + cam.getName() + "'.");
+	                            logDebug("UUID ONVIF '" + uuid + "' salvo para camera importada '" + cam.getName() + "'.");
 	                            necessarioSalvar = true;
 	                        }
 	                    }
@@ -473,7 +485,7 @@ public class VMSLite extends JFrame {
 	                saveConfigs();
 	            }
 
-	            rebuildLayout();
+	            SwingUtilities.invokeLater(this::rebuildLayout);
 
 	            SwingUtilities.invokeLater(() -> {
 	                cardLayout.show(mainContainer, "CAMERAS");
@@ -554,8 +566,16 @@ public class VMSLite extends JFrame {
 			return;
 
 		// Otimização dinâmica de tamanho de matriz sugerida anteriormente
-		int maxGridRows = Math.max(100, rows + 20);
-		int maxGridCols = Math.max(100, cols + 20);
+		int totalRowSpan = 0;
+		int maxColSpan = cols;
+		for (CameraPanel panel : cameras) {
+			Camera cam = panel.getConfig();
+			totalRowSpan += Math.max(1, cam.getRowSpan());
+			maxColSpan = Math.max(maxColSpan, Math.max(1, cam.getColSpan()));
+		}
+
+		int maxGridRows = Math.max(rows, totalRowSpan + rows);
+		int maxGridCols = Math.max(cols, maxColSpan);
 		boolean[][] ocupado = new boolean[maxGridRows][maxGridCols];
 
 		int maxRowUsada = rows;
@@ -566,8 +586,8 @@ public class VMSLite extends JFrame {
 		for (CameraPanel panel : cameras) {
 			Camera cam = panel.getConfig();
 
-			int w = cam.getColSpan();
-			int h = cam.getRowSpan();
+			int w = Math.max(1, Math.min(cam.getColSpan(), maxGridCols));
+			int h = Math.max(1, cam.getRowSpan());
 
 			Point p = findPositionDinamico(ocupado, cols, w, h);
 			posicoes.put(panel, p);
@@ -589,8 +609,8 @@ public class VMSLite extends JFrame {
 			Camera cam = panel.getConfig();
 			Point p = posicoes.get(panel);
 
-			int w = cam.getColSpan();
-			int h = cam.getRowSpan();
+			int w = Math.max(1, Math.min(cam.getColSpan(), maxGridCols));
+			int h = Math.max(1, cam.getRowSpan());
 
 			int x = p.x * (cellW + gap);
 			int y = p.y * (cellH + gap);
@@ -654,33 +674,31 @@ public class VMSLite extends JFrame {
 
 		if (result == 0) { 
 
-			if (!urlField.getText().equals(config.getUrl())) {
 			    try {
+			        String oldUrl = config.getUrl();
+			        String newUrl = urlField.getText().trim();
 			        config.setName(nameField.getText());
-			        config.setUrl(urlField.getText());
-			        config.setRowSpan(Integer.parseInt(linhasField.getText()));
-			        config.setColSpan(Integer.parseInt(colunasField.getText()));
+			        config.setUrl(newUrl);
+			        config.setRowSpan(Math.max(1, Integer.parseInt(linhasField.getText().trim())));
+			        config.setColSpan(Math.max(1, Integer.parseInt(colunasField.getText().trim())));
 
 			        saveConfigs();
 
-			        if (panel.getConfig() != null) {
+			        if (!newUrl.equals(oldUrl)) {
 			            panel.setArrastando(true);
+			            SwingUtilities.invokeLater(() -> {
+			                panel.setArrastando(false);
+			                panel.start();
+			            });
 			        }
 
 			        rebuildLayout();
-
-			        SwingUtilities.invokeLater(() -> {
-			            panel.setArrastando(false);
-			            panel.start();
-			        });
 
 			    } catch (NumberFormatException ex) {
 			        JOptionPane.showMessageDialog(this,
 			                "Por favor, insira números válidos para linhas e colunas.",
 			                "Erro de Validação", JOptionPane.ERROR_MESSAGE);
 			    }
-			}
-
 		} else if (result == 1) {
 			int confirmar = JOptionPane.showConfirmDialog(
 					this, "Tem certeza que deseja remover a câmera \"" + config.getName() + "\"?",
@@ -717,7 +735,7 @@ public class VMSLite extends JFrame {
 		loadingDialog.setLocationRelativeTo(this);
 		loadingDialog.setVisible(true);
 
-		OnvifDiscoveryService.discoverDevices(dispositivos -> {
+		OnvifDiscoveryService.discoverDevices(true, dispositivos -> {
 			SwingUtilities.invokeLater(() -> {
 
 				loadingDialog.dispose();
@@ -924,10 +942,16 @@ public class VMSLite extends JFrame {
 					);
 
 			add.start().waitFor();
-			System.out.println("Adicionado ao Startup!");
+			logDebug("Adicionado ao Startup!");
 
 		} catch (Exception e) {
 			e.printStackTrace();
+		}
+	}
+
+	private static void logDebug(String message) {
+		if (DEBUG) {
+			System.out.println(message);
 		}
 	}
 

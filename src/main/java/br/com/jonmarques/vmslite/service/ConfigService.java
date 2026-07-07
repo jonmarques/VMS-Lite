@@ -7,6 +7,7 @@ import java.io.File;
 import java.util.ArrayList;
 
 public class ConfigService {
+    private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
 
     private static final String DIR_NAME = ".vmslite";
     private static final String FILE_NAME = "vms-config.json";
@@ -31,7 +32,7 @@ public class ConfigService {
             mapper.writerWithDefaultPrettyPrinter()
                     .writeValue(FILE, config);
 
-            System.out.println("Config salva em: " + FILE.getAbsolutePath());
+            logDebug("Config salva em: " + FILE.getAbsolutePath());
 
         } catch (Exception e) {
             System.err.println("Erro ao salvar config padrão:");
@@ -53,7 +54,7 @@ public class ConfigService {
             mapper.writerWithDefaultPrettyPrinter()
                     .writeValue(file, config);
 
-            System.out.println("Config exportada em: " + file.getAbsolutePath());
+            logDebug("Config exportada em: " + file.getAbsolutePath());
 
         } catch (Exception e) {
             System.err.println("Erro ao exportar config:");
@@ -119,6 +120,12 @@ public class ConfigService {
     private static void ensureDir() {
         if (!BASE_DIR.exists()) {
             BASE_DIR.mkdirs();
+        }
+    }
+
+    private static void logDebug(String message) {
+        if (DEBUG) {
+            System.out.println(message);
         }
     }
 }

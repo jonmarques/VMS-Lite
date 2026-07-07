@@ -14,6 +14,7 @@ public class Camera {
     public Camera(String name, String url, String uuid, int rowSpan, int colSpan) {
         this.name = name;
         this.url = url;
+        this.uuid = uuid;
         this.rowSpan = rowSpan;
         this.colSpan = colSpan;
     }
@@ -21,6 +22,7 @@ public class Camera {
     public Camera(String name, String url, String uuid) {
         this.name = name;
         this.url = url;
+        this.uuid = uuid;
         this.rowSpan = 1;
         this.colSpan = 1;
     }
