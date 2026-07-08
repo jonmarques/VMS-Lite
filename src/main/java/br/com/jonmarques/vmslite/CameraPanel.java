@@ -81,7 +81,7 @@ public class CameraPanel extends JPanel {
       this.camera = camera;
       this.setLayout(new BorderLayout());
 
-      this.player = new CallbackMediaPlayerComponent();
+      this.player = VlcManager.createPlayer();
       this.player.mediaPlayer().audio().setMute(true);
       this.loadingLabel = new JLabel("Carregando...", 0);
       this.loadingLabel.setOpaque(true);
@@ -273,7 +273,7 @@ public class CameraPanel extends JPanel {
    }
 
    private void atualizarIpPorUuid() {
-      OnvifDiscoveryService.discoverDevices(dispositivos -> {
+      OnvifDiscoveryService.discoverDevicesForReconnect(dispositivos -> {
          String uuidSalvo = this.camera.getUuid();
          String ipAntigo = OnvifDiscoveryService.extrairIpDaUrl(this.camera.getUrl());
          String ipEncontrado = OnvifDiscoveryService.encontrarIpPorUuid(dispositivos, uuidSalvo);

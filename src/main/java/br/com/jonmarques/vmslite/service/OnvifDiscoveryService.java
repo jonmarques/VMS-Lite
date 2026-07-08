@@ -31,10 +31,12 @@ import java.util.regex.Pattern;
 public class OnvifDiscoveryService {
 	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
 	private static final long DISCOVERY_CACHE_MS = 30000;
+	private static final long RECONNECT_DISCOVERY_MIN_INTERVAL_MS = 120_000;
 	private static final Object DISCOVERY_LOCK = new Object();
 
 	private static Map<String, DeviceInfo> cachedDevices = new HashMap<>();
 	private static long cachedAt = 0;
+	private static long lastReconnectTriggeredDiscovery = 0;
 	private static CompletableFuture<Map<String, DeviceInfo>> discoveryInProgress;
 
 	private static class PerfilInfo {
@@ -83,6 +85,43 @@ public class OnvifDiscoveryService {
 		if (callback != null) {
 			future.thenAccept(dispositivos -> callback.accept(new HashMap<>(dispositivos)));
 		}
+	}
+
+	/**
+	 * Descoberta rate-limited para reconexão: reutiliza cache, compartilha varredura
+	 * em andamento e impede nova varredura multicast antes do intervalo mínimo.
+	 */
+	public static void discoverDevicesForReconnect(Consumer<Map<String, DeviceInfo>> callback) {
+		if (callback == null) {
+			return;
+		}
+
+		synchronized (DISCOVERY_LOCK) {
+			long now = System.currentTimeMillis();
+			boolean cacheValido = !cachedDevices.isEmpty()
+					&& now - cachedAt < DISCOVERY_CACHE_MS;
+
+			if (cacheValido) {
+				callback.accept(new HashMap<>(cachedDevices));
+				return;
+			}
+
+			if (discoveryInProgress != null && !discoveryInProgress.isDone()) {
+				discoveryInProgress.thenAccept(dispositivos -> callback.accept(new HashMap<>(dispositivos)));
+				return;
+			}
+
+			boolean intervaloRespeitado = now - lastReconnectTriggeredDiscovery >= RECONNECT_DISCOVERY_MIN_INTERVAL_MS;
+			if (!intervaloRespeitado) {
+				logDebug("Reconexao: varredura ONVIF adiada (intervalo minimo). Usando cache existente.");
+				callback.accept(new HashMap<>(cachedDevices));
+				return;
+			}
+
+			lastReconnectTriggeredDiscovery = now;
+		}
+
+		discoverDevices(true, callback);
 	}
 
 	private static void startDiscoveryThread(CompletableFuture<Map<String, DeviceInfo>> future) {

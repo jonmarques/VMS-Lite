@@ -6,18 +6,19 @@ import com.sun.jna.NativeLibrary;
 
 import br.com.jonmarques.vmslite.entity.Camera;
 import br.com.jonmarques.vmslite.entity.VMSConfig;
+import uk.co.caprica.vlcj.binding.support.runtime.RuntimeUtil;
 import br.com.jonmarques.vmslite.service.ConfigService;
 import br.com.jonmarques.vmslite.service.OnvifDiscoveryService;
-import uk.co.caprica.vlcj.binding.support.runtime.RuntimeUtil;
 
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
+import java.util.Set;
 
 public class VMSLite extends JFrame {
 
@@ -29,7 +30,6 @@ public class VMSLite extends JFrame {
 	private JPanel camerasPanel;
 
 	private final List<CameraPanel> cameras = new ArrayList<>();
-	private final List<Camera> configs = new ArrayList<>();
 
 	private VMSConfig vmsconfig;
 
@@ -58,6 +58,15 @@ public class VMSLite extends JFrame {
 
 	    Runtime.getRuntime().addShutdownHook(new Thread(SingleInstance::unlock));
 		
+		setSize(1400, 900);
+		setLocationRelativeTo(null);
+
+		// 1. Cria a interface estrutural com a tela de "Carregando..." ativa
+		createInterface();
+
+		// 2. Torna a janela visível imediatamente para exibir o feedback visual
+		setVisible(true);
+	    
 		String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
 		addToStartup("VMSLite", exePath);
 
@@ -97,21 +106,18 @@ public class VMSLite extends JFrame {
 					}
 					SwingUtilities.invokeLater(() -> {
 						dispose();
+						VlcManager.shutdown();
 						System.exit(0);
 					});
 				}).start();
 			}
 		});
 
-		setSize(1400, 900);
-		setLocationRelativeTo(null);
+
+		
 		vmsconfig = ConfigService.load();
 
-		// 1. Cria a interface estrutural com a tela de "Carregando..." ativa
-		createInterface();
-
-		// 2. Torna a janela visível imediatamente para exibir o feedback visual
-		setVisible(true);
+		VlcManager.init();
 
 		// 3. Processa e popula as câmeras em background sem congelar o visual
 		new Thread(() -> {
@@ -134,7 +140,7 @@ public class VMSLite extends JFrame {
 
 		if (indexOrigem != -1 && indexDestino != -1) {
 			java.util.Collections.swap(cameras, indexOrigem, indexDestino);
-			java.util.Collections.swap(configs, indexOrigem, indexDestino);
+			java.util.Collections.swap(vmsconfig.getCameras(), indexOrigem, indexDestino);
 			saveConfigs();
 		}
 		rebuildLayout();
@@ -287,10 +293,14 @@ public class VMSLite extends JFrame {
 	}
 
 	private CameraPanel addCameraPanel(Camera config) {
+		return addCameraPanel(config, false);
+	}
+
+	private CameraPanel addCameraPanel(Camera config, boolean deferLayout) {
 		if (!SwingUtilities.isEventDispatchThread()) {
 			final CameraPanel[] panel = new CameraPanel[1];
 			try {
-				SwingUtilities.invokeAndWait(() -> panel[0] = addCameraPanel(config));
+				SwingUtilities.invokeAndWait(() -> panel[0] = addCameraPanel(config, deferLayout));
 			} catch (Exception e) {
 				throw new IllegalStateException("Erro ao adicionar camera na interface", e);
 			}
@@ -300,10 +310,14 @@ public class VMSLite extends JFrame {
 		CameraPanel panel = new CameraPanel(this, config);
 
 		cameras.add(panel);
-		configs.add(config);
+		if (!vmsconfig.getCameras().contains(config)) {
+			vmsconfig.getCameras().add(config);
+		}
 		camerasPanel.add(panel);
 
-		rebuildLayout();
+		if (!deferLayout) {
+			rebuildLayout();
+		}
 		return panel;
 	}
 
@@ -316,92 +330,104 @@ public class VMSLite extends JFrame {
 		});
 	}
 
+	private void startCamerasSequentially() {
+		startCamerasSequentially(0);
+	}
+
+	private void startCamerasSequentially(int fromIndex) {
+		final int[] index = {fromIndex};
+
+		Timer sequentialOpener = new Timer(250, null);
+		sequentialOpener.addActionListener(e -> {
+			if (index[0] < cameras.size()) {
+				cameras.get(index[0]).start();
+				index[0]++;
+			} else {
+				sequentialOpener.stop();
+			}
+		});
+		sequentialOpener.start();
+	}
+
+	private boolean aplicarAtualizacoesOnvif(List<Camera> cameraList, Map<String, OnvifDiscoveryService.DeviceInfo> dispositivos) {
+		boolean necessarioSalvar = false;
+		Set<Camera> urlAlteradas = new HashSet<>();
+
+		for (Camera config : cameraList) {
+			String ip = OnvifDiscoveryService.extrairIpDaUrl(config.getUrl());
+
+			if ((config.getUuid() == null || config.getUuid().isBlank()) && ip != null && dispositivos.containsKey(ip)) {
+				String uuidAtual = dispositivos.get(ip).getUuid();
+				if (uuidAtual != null) {
+					config.setUuid(uuidAtual);
+					logDebug("UUID ONVIF salvo para '" + config.getName() + "'.");
+					necessarioSalvar = true;
+				}
+			}
+
+			boolean ipAindaAtivo = ip != null && dispositivos.containsKey(ip);
+
+			if (!ipAindaAtivo && config.getUuid() != null && !config.getUuid().isBlank()) {
+				String ipCandidato = OnvifDiscoveryService.encontrarIpPorUuid(dispositivos, config.getUuid());
+
+				if (ipCandidato != null) {
+					String novoUrl = OnvifDiscoveryService.substituirIpNaUrl(config.getUrl(), ipCandidato);
+					config.setUrl(novoUrl);
+					urlAlteradas.add(config);
+					logDebug("IP da camera '" + config.getName() + "' alterado para " + ipCandidato + " (via UUID)");
+					necessarioSalvar = true;
+				}
+			}
+		}
+
+		if (!urlAlteradas.isEmpty()) {
+			reiniciarCamerasComUrlAlterada(urlAlteradas);
+		}
+
+		return necessarioSalvar;
+	}
+
+	private void reiniciarCamerasComUrlAlterada(Set<Camera> alteradas) {
+		SwingUtilities.invokeLater(() -> {
+			for (CameraPanel panel : cameras) {
+				if (alteradas.contains(panel.getConfig())) {
+					panel.start();
+				}
+			}
+		});
+	}
+
 	private void loadSavedCameras() {
+		List<Camera> saved = new ArrayList<>(vmsconfig.getCameras());
 
-	    List<Camera> saved = vmsconfig.getCameras();
+		SwingUtilities.invokeLater(() -> lblStatus.setText("Montando grade de câmeras..."));
 
-	    SwingUtilities.invokeLater(() -> lblStatus.setText("Carregando e atualizando configurações..."));
+		for (Camera config : saved) {
+			logDebug("Camera preparada: " + config.getUrl() + " uuid: " + config.getUuid());
+			addCameraPanel(config, true);
+		}
 
-	    OnvifDiscoveryService.discoverDevices(dispositivos -> {
+		SwingUtilities.invokeLater(() -> {
+			lblStatus.setText("Carregando video das cameras...");
+			rebuildLayout();
+			cardLayout.show(mainContainer, "CAMERAS");
+			startCamerasSequentially();
+		});
 
-	        boolean necessarioSalvar = false;
-
-	        for (Camera config : saved) {
-
-	            String ip = OnvifDiscoveryService.extrairIpDaUrl(config.getUrl());
-
-	            // Se ainda não tem UUID salvo, tenta capturar agora pelo IP atual
-	            if ((config.getUuid() == null || config.getUuid().isBlank()) && ip != null && dispositivos.containsKey(ip)) {
-
-	                String uuidAtual = dispositivos.get(ip).getUuid();
-	                if (uuidAtual != null) {
-	                    config.setUuid(uuidAtual);
-	                    logDebug("UUID ONVIF salvo para '" + config.getName() + "'.");
-	                    necessarioSalvar = true;
-	                }
-	            }
-
-	            // Se o IP salvo não está mais respondendo na varredura atual, tenta achar pelo UUID
-	            boolean ipAindaAtivo = ip != null && dispositivos.containsKey(ip);
-
-	            if (!ipAindaAtivo && config.getUuid() != null && !config.getUuid().isBlank()) {
-	                String ipCandidato = OnvifDiscoveryService.encontrarIpPorUuid(dispositivos, config.getUuid());
-
-	                if (ipCandidato != null) {
-	                    String novoUrl = OnvifDiscoveryService.substituirIpNaUrl(config.getUrl(), ipCandidato);
-	                    config.setUrl(novoUrl);
-	                    logDebug("IP da camera '" + config.getName() + "' alterado para " + ipCandidato + " (via UUID)");
-	                    necessarioSalvar = true;
-	                }
-	            }
-
-	            logDebug("Camera iniciada: "
-	                    + config.getUrl()
-	                    + " uuid: "
-	                    + config.getUuid());
-
-	            addCameraPanel(config);
-	        }
-
-	        if (necessarioSalvar) {
-	            saveConfigs();
-	        }
-
-	        SwingUtilities.invokeLater(() -> {
-	            lblStatus.setText("Carregando video das cameras...");
-	            rebuildLayout();
-	        });
-
-	        SwingUtilities.invokeLater(() -> {
-
-	            final int[] index = {0};
-
-	            Timer sequentialOpener = new Timer(250, null);
-
-	            sequentialOpener.addActionListener(e -> {
-	                if (index[0] < cameras.size()) {
-	                    cameras.get(index[0]).start();
-	                    index[0]++;
-	                } else {
-	                    sequentialOpener.stop();
-	                }
-	            });
-
-	            sequentialOpener.start();
-
-	        });
-	        SwingUtilities.invokeLater(() -> {
-	            cardLayout.show(mainContainer, "CAMERAS");
-	        });
-
-	    });
+		// ONVIF roda em paralelo — não bloqueia a exibição do vídeo
+		OnvifDiscoveryService.discoverDevices(dispositivos -> {
+			boolean necessarioSalvar = aplicarAtualizacoesOnvif(saved, dispositivos);
+			if (necessarioSalvar) {
+				saveConfigs();
+			}
+		});
 	}
 
 	public void saveConfigs() {
 		VMSConfig config = new VMSConfig(
 				vmsconfig.getLayoutCols(),
 				vmsconfig.getLayoutRows(),
-				configs
+				vmsconfig.getCameras()
 				);
 
 		try {
@@ -413,7 +439,7 @@ public class VMSLite extends JFrame {
 
 	public void removeCamera(CameraPanel panel) {
 		cameras.remove(panel);
-		configs.remove(panel.getConfig());
+		vmsconfig.getCameras().remove(panel.getConfig());
 		camerasPanel.remove(panel);
 		saveConfigs();
 
@@ -430,7 +456,6 @@ public class VMSLite extends JFrame {
 
 	    new Thread(() -> {
 	        try {
-
 	            File selectedFile = chooser.getSelectedFile();
 	            VMSConfig config = ConfigService.loadFromFile(selectedFile);
 	            ConfigService.save(config);
@@ -441,57 +466,39 @@ public class VMSLite extends JFrame {
 	                }
 
 	                cameras.clear();
-	                configs.clear();
+	                vmsconfig.getCameras().clear();
 	                camerasPanel.removeAll();
 	            });
 
 	            vmsconfig.setLayoutRows(config.getLayoutRows());
 	            vmsconfig.setLayoutCols(config.getLayoutCols());
 
-	            SwingUtilities.invokeLater(() -> lblStatus.setText("Buscando dispositivos ONVIF para atualizar UUIDs..."));
+	            List<Camera> importadas = new ArrayList<>(config.getCameras());
 
-	            CountDownLatch latch = new CountDownLatch(1);
-				Map<String, OnvifDiscoveryService.DeviceInfo>[] resultado = new Map[1];
+	            SwingUtilities.invokeLater(() -> lblStatus.setText("Montando grade importada..."));
 
-	            OnvifDiscoveryService.discoverDevices(dispositivos -> {
-	                resultado[0] = dispositivos;
-	                latch.countDown();
-	            });
-
-	            latch.await();
-	            Map<String, OnvifDiscoveryService.DeviceInfo> dispositivos = resultado[0];
-
-	            boolean necessarioSalvar = false;
-
-	            for (Camera cam : config.getCameras()) {
-
-	                if (cam.getUuid() == null || cam.getUuid().isBlank()) {
-	                    String ip = OnvifDiscoveryService.extrairIpDaUrl(cam.getUrl());
-
-	                    if (ip != null && dispositivos.containsKey(ip)) {
-	                        String uuid = dispositivos.get(ip).getUuid();
-	                        if (uuid != null) {
-	                            cam.setUuid(uuid);
-	                            logDebug("UUID ONVIF '" + uuid + "' salvo para camera importada '" + cam.getName() + "'.");
-	                            necessarioSalvar = true;
-	                        }
-	                    }
-	                }
-
-	                addCamera(cam);
+	            for (Camera cam : importadas) {
+	                addCameraPanel(cam, true);
 	            }
-
-	            if (necessarioSalvar) {
-	                saveConfigs();
-	            }
-
-	            SwingUtilities.invokeLater(this::rebuildLayout);
 
 	            SwingUtilities.invokeLater(() -> {
+	                lblStatus.setText("Carregando video das cameras...");
+	                rebuildLayout();
 	                cardLayout.show(mainContainer, "CAMERAS");
+	                startCamerasSequentially();
+	            });
+
+	            // ONVIF em paralelo — mesmo fluxo do startup
+	            OnvifDiscoveryService.discoverDevices(dispositivos -> {
+	                boolean necessarioSalvar = aplicarAtualizacoesOnvif(importadas, dispositivos);
+	                if (necessarioSalvar) {
+	                    saveConfigs();
+	                }
 	            });
 	        } catch (Exception ex) {
 	            ex.printStackTrace();
+	            SwingUtilities.invokeLater(() ->
+	                    JOptionPane.showMessageDialog(this, "Erro ao importar configuração.", "Erro", JOptionPane.ERROR_MESSAGE));
 	        } finally {
 	            SwingUtilities.invokeLater(() -> {
 	                rebuildLayout();
@@ -529,7 +536,7 @@ public class VMSLite extends JFrame {
 			GraphicsConfiguration gc = getGraphicsConfiguration();
 			Rectangle screenBounds = (gc != null)
 					? gc.getBounds()
-							: new Rectangle(Toolkit.getDefaultToolkit().getScreenSize());
+					: new Rectangle(Toolkit.getDefaultToolkit().getScreenSize());
 
 			dispose();
 			setUndecorated(true);
@@ -744,8 +751,8 @@ public class VMSLite extends JFrame {
 				botaoMenu.setText("Buscar ONVIF 🔍");
 
 				java.util.Set<String> ipsConectados = new java.util.HashSet<>();
-				if (this.configs != null) {
-					for (br.com.jonmarques.vmslite.entity.Camera cam : this.configs) {
+				if (vmsconfig.getCameras() != null) {
+					for (br.com.jonmarques.vmslite.entity.Camera cam : vmsconfig.getCameras()) {
 						java.util.regex.Matcher m = java.util.regex.Pattern.compile("@(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})")
 								.matcher(cam.getUrl());
 						if (m.find()) {
@@ -828,6 +835,7 @@ public class VMSLite extends JFrame {
 					if (linhasSelecionadas.isEmpty()) return;
 
 					OnvifDiscoveryService serviceOnvif = new OnvifDiscoveryService();
+					int indiceInicial = cameras.size();
 
 					for (String lambdaLinha : linhasSelecionadas) {
 					    String ip = lambdaLinha.split(" ")[0].trim();
@@ -899,7 +907,7 @@ public class VMSLite extends JFrame {
 
 							if (rtspUrl != null) {
 					            Camera novaCam = new Camera(nomeFinal, rtspUrl, uuid, rSpan, cSpan);
-					            addCamera(novaCam);
+					            addCameraPanel(novaCam, true);
 					        } else {
 					            JOptionPane.showMessageDialog(VMSLite.this,
 					                    "Não foi possível obter a URL RTSP. Verifique usuário/senha.",
@@ -908,6 +916,7 @@ public class VMSLite extends JFrame {
 						}
 					}
 					rebuildLayout();
+					startCamerasSequentially(indiceInicial);
 					saveConfigs();
 				}
 			});
