@@ -292,10 +292,6 @@ public class VMSLite extends JFrame {
 		}
 	}
 
-	private CameraPanel addCameraPanel(Camera config) {
-		return addCameraPanel(config, false);
-	}
-
 	private CameraPanel addCameraPanel(Camera config, boolean deferLayout) {
 		if (!SwingUtilities.isEventDispatchThread()) {
 			final CameraPanel[] panel = new CameraPanel[1];
@@ -319,15 +315,6 @@ public class VMSLite extends JFrame {
 			rebuildLayout();
 		}
 		return panel;
-	}
-
-	private void addCamera(Camera config) {
-		CameraPanel panel = addCameraPanel(config);
-		SwingUtilities.invokeLater(() -> {
-			if (panel.isDisplayable()) {
-				panel.start();
-			}
-		});
 	}
 
 	private void startCamerasSequentially() {
