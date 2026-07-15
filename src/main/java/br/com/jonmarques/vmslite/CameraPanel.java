@@ -17,6 +17,7 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
@@ -28,10 +29,11 @@ import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 
 public class CameraPanel extends JPanel {
+	
 	private static final long serialVersionUID = 1L;
 	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
 	private static final ScheduledExecutorService RECONNECT_EXECUTOR = Executors.newScheduledThreadPool(
-			Math.max(2, 4),
+			4,
 			new ThreadFactory() {
 				private int count = 1;
 
@@ -44,7 +46,7 @@ public class CameraPanel extends JPanel {
 			});
 
 	private static final ExecutorService RELEASE_EXECUTOR =
-		    Executors.newSingleThreadExecutor(r -> {
+		    Executors.newFixedThreadPool(3, r -> {
 		        Thread t = new Thread(r, "camera-release");
 		        t.setDaemon(true);
 		        return t;
@@ -352,41 +354,87 @@ public class CameraPanel extends JPanel {
 	}
 
 
-	public void stop() {
-		this.released = true;
-		this.reconnecting = false;
-		cancelReconnectTask();
+	public Future<?> stop() {
 
-		// Remove os listeners imediatamente para evitar novos eventos durante o descarte
-		try {
-			if (this.currentListener != null && this.player.mediaPlayer() != null) {
-				this.player.mediaPlayer().events().removeMediaPlayerEventListener(this.currentListener);
-				this.currentListener = null;
-			}
-		} catch (Exception e) {
-			// Silencioso se o player já estiver inválido
-		}
+	    released = true;
+	    reconnecting = false;
 
-		// Executa a liberação nativa em uma Thread separada para NUNCA travar o Swing/EDT
-		RELEASE_EXECUTOR.execute(() -> {
-			synchronized (lifecycleLock) {
-				try {
-					logDebug("Liberando recursos nativos em background para: " + this.camera.getName());
-					if (this.player.mediaPlayer() != null) {
-						// stop() nativo pode travar se o RTSP estiver quebrado, por isso o timeout implícito de rodar em thread separada ajuda
-						this.player.mediaPlayer().controls().stop();
-					}
-					this.player.release();
-					logDebug("Recursos nativos liberados com sucesso: " + this.camera.getName());
-				} catch (Exception var2) {
-					System.err.println("Aviso: Erro ao liberar recursos nativos da camera " + this.camera.getName());
-				}
-			}
-		});
+	    cancelReconnectTask();
+
+
+	    try {
+	        if(currentListener != null){
+
+	            player.mediaPlayer()
+	                  .events()
+	                  .removeMediaPlayerEventListener(currentListener);
+
+	            currentListener = null;
+	        }
+
+	    } catch(Exception ignored){}
+
+
+	    if(RELEASE_EXECUTOR.isShutdown()){
+	        return null;
+	    }
+
+
+	    return RELEASE_EXECUTOR.submit(() -> {
+
+	        try {
+
+	            MediaPlayer mp = player.mediaPlayer();
+
+
+	            if(mp != null){
+
+	                try {
+	                    mp.controls().stop();
+	                } catch(Exception ignored){}
+
+
+	                Thread.sleep(200);
+	            }
+
+
+	            player.release();
+
+
+	        }catch(Exception e){
+
+	            System.err.println(
+	                "Erro liberando "+camera.getName()
+	            );
+	        }
+
+	    });
 	}
 
 	public Camera getConfig() {
 		return this.camera;
+	}
+	
+	public static void shutdownExecutors(){
+
+	    RECONNECT_EXECUTOR.shutdownNow();
+
+
+	    RELEASE_EXECUTOR.shutdown();
+
+	    try {
+
+	        if(!RELEASE_EXECUTOR.awaitTermination(5, TimeUnit.SECONDS)){
+	            RELEASE_EXECUTOR.shutdownNow();
+	        }
+
+	    } catch (InterruptedException e) {
+
+	        Thread.currentThread().interrupt();
+	        RELEASE_EXECUTOR.shutdownNow();
+
+	    }
+
 	}
 
 	private static void logDebug(String message) {

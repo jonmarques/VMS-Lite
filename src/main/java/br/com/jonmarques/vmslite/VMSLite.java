@@ -19,6 +19,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 public class VMSLite extends JFrame {
 
@@ -94,21 +96,47 @@ public class VMSLite extends JFrame {
 		addWindowListener(new java.awt.event.WindowAdapter() {
 			@Override
 			public void windowClosing(java.awt.event.WindowEvent e) {
-				for (CameraPanel panel : cameras) {
-					panel.stop();
-				}
-
 				new Thread(() -> {
-					try {
-						Thread.sleep(300);
-					} catch (InterruptedException ex) {
-						Thread.currentThread().interrupt();
-					}
-					SwingUtilities.invokeLater(() -> {
-						dispose();
-						VlcManager.shutdown();
-						System.exit(0);
-					});
+
+				    List<Future<?>> tasks = new ArrayList<>();
+
+
+				    for(CameraPanel panel : cameras){
+
+				        Future<?> f = panel.stop();
+
+				        if(f != null)
+				            tasks.add(f);
+				    }
+
+
+				    for(Future<?> f : tasks){
+
+				        try {
+
+				            f.get(3, TimeUnit.SECONDS);
+
+				        } catch(Exception e2){
+
+				            System.err.println(
+				                "Timeout liberando câmera"
+				            );
+				        }
+				    }
+
+
+				    VlcManager.shutdown();
+
+
+				    SwingUtilities.invokeLater(() -> {
+
+				        dispose();
+
+				        System.exit(0);
+
+				    });
+
+
 				}).start();
 			}
 		});

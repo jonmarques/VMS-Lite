@@ -11,6 +11,9 @@ public final class VlcManager {
     private static MediaPlayerFactory factory;
 
     private VlcManager() {
+    	Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+    	    VlcManager.shutdown();
+    	}));
     }
 
     public static synchronized void init() {
