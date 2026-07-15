@@ -15,6 +15,7 @@ import java.awt.Point;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -30,7 +31,7 @@ public class CameraPanel extends JPanel {
 	private static final long serialVersionUID = 1L;
 	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
 	private static final ScheduledExecutorService RECONNECT_EXECUTOR = Executors.newScheduledThreadPool(
-			Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+			Math.max(2, 4),
 			new ThreadFactory() {
 				private int count = 1;
 
@@ -42,40 +43,35 @@ public class CameraPanel extends JPanel {
 				}
 			});
 
+	private static final ExecutorService RELEASE_EXECUTOR =
+		    Executors.newSingleThreadExecutor(r -> {
+		        Thread t = new Thread(r, "camera-release");
+		        t.setDaemon(true);
+		        return t;
+		    });
+	
 	private static final String[] MEDIA_OPTIONS = new String[]{
-	         // 1. ZERAR O BUFFER DE REDE (Força Tempo Real Extremo)
-	         ":network-caching=1000",           // Reduzido de 1500 para 100ms (Sem espaço para acumular atraso)
+	         ":network-caching=1000",           
 	         ":live-caching=1000",
-	         ":file-caching=1000",
 
-	         // 2. Sincronismo Agressivo pelo Relógio do Sistema (PC) e não da Câmera
-	         ":clock-synchro=1",               // Ativado para forçar o sincronismo
-	         ":clock-jitter=0",                // Tolerância zero para atrasos de rede
-	         ":cr-average=10",                 // Ajuste rápido de relógio
+	         ":clock-synchro=1",               
+	         ":clock-jitter=0",                
 
-	         // 3. VOLTAR A DESCARTAR FRAMES SE ACUMULAR (Necessário para eliminar os 30s)
-	         ":skip-frames",                   // Se o frame atrasar, pula ele!
-	         ":framedrop",                     // Força o descarte de frames antigos para alcançar o "ao vivo"
+	         ":framedrop",  
 	         ":drop-late-frames",
 
-	         // 4. Decodificação FFmpeg focada em Latência Zero
 	         ":avcodec-hw=none",
 	         ":avcodec-fast",
-	         ":avcodec-threads=2",             // 2 threads por câmera é mais estável para streams simultâneos
+	         ":avcodec-threads=1",          
 	         ":avcodec-skiploopfilter=4",
-	         ":avcodec-skip-frame=1",          // Decodifica apenas os frames principais (I-Frames) se acumular
 	         
-	         // 5. Configuração de Áudio "Muda" (Mantendo a conexão ativa)
 	         ":audio-track-id=-1",             
 	         ":no-audio-time-sync",            
-	         ":volume=0",                      
 
-	         // 6. Ajustes de Rede para Fluxo Contínuo
-	         ":rtsp-tcp",                      // Mantém TCP para não corromper a imagem com o buffer baixo
-	         ":rtsp-frame-buffer-size=500000", // Buffer de pacotes menor para evitar represamento
+	         ":rtsp-tcp", 
 	         ":no-video-title-show",
-	         ":rtsp-timeout=3",
-	         ":network-timeout=3000"
+	         ":rtsp-timeout=8",
+	         ":network-timeout=8000"
 	   };
 	
 	private final Camera camera;
@@ -83,7 +79,7 @@ public class CameraPanel extends JPanel {
 	private final JLabel loadingLabel;
 	private final Object lifecycleLock = new Object();
 	private final VMSLite vmslite;
-
+	
 	private volatile boolean reconnecting = false;
 	private volatile boolean released = false;
 	private volatile boolean bootInicializado = false;
@@ -98,6 +94,7 @@ public class CameraPanel extends JPanel {
 		this.setLayout(new BorderLayout());
 
 		this.player = VlcManager.createPlayer();
+		this.player.mediaPlayer().audio().setMute(true);
 		this.loadingLabel = new JLabel("Carregando...", 0);
 		this.loadingLabel.setOpaque(true);
 		this.loadingLabel.setBackground(Color.BLACK);
@@ -173,19 +170,24 @@ public class CameraPanel extends JPanel {
 			this.player.setVisible(false);
 			this.loadingLabel.setText("Movendo: " + this.camera.getName());
 			this.loadingLabel.setBackground(new Color(30, 144, 255, 200));
-			this.loadingLabel.setVisible(true);
+			if (!loadingLabel.isVisible()) {
+			    loadingLabel.setVisible(true);
+			}
 		} else {
 			this.player.setVisible(true);
 			this.loadingLabel.setBackground(new Color(0, 0, 0, 180));
-			this.loadingLabel.setVisible(false);
+			if (loadingLabel.isVisible()) {
+			    loadingLabel.setVisible(false);
+			}		
 		}
-		this.revalidate();
 		this.repaint();
 	}
 
 	public void start() {
 		SwingUtilities.invokeLater(() -> {
-			this.loadingLabel.setVisible(true);
+			if (!loadingLabel.isVisible()) {
+			    loadingLabel.setVisible(true);
+			}
 			this.loadingLabel.setText("Carregando...");
 		});
 
@@ -203,8 +205,9 @@ public class CameraPanel extends JPanel {
 				SwingUtilities.invokeLater(() -> {
 					synchronized (CameraPanel.this.lifecycleLock) {
 						if (CameraPanel.this.released) return;
-						CameraPanel.this.loadingLabel.setVisible(false);
-						CameraPanel.this.player.mediaPlayer().video().setAspectRatio(null);
+						if (loadingLabel.isVisible()) {
+						    loadingLabel.setVisible(false);
+						}						CameraPanel.this.player.mediaPlayer().video().setAspectRatio(null);
 					}
 				});
 				CameraPanel.this.bootInicializado = true;
@@ -216,7 +219,9 @@ public class CameraPanel extends JPanel {
 					logDebug("Erro de reprodução detectado para: " + CameraPanel.this.camera.getName());
 
 					SwingUtilities.invokeLater(() -> {
-						CameraPanel.this.loadingLabel.setVisible(true);
+						if (!loadingLabel.isVisible()) {
+						    loadingLabel.setVisible(true);
+						}
 						CameraPanel.this.loadingLabel.setText("Reconectando...");
 					});
 
@@ -285,7 +290,9 @@ public class CameraPanel extends JPanel {
 
 		SwingUtilities.invokeLater(() -> {
 			if (!this.released) {
-				this.loadingLabel.setVisible(true);
+				if (!loadingLabel.isVisible()) {
+				    loadingLabel.setVisible(true);
+				}
 				this.loadingLabel.setText("Reconectando...");
 			}
 		});
@@ -361,7 +368,7 @@ public class CameraPanel extends JPanel {
 		}
 
 		// Executa a liberação nativa em uma Thread separada para NUNCA travar o Swing/EDT
-		new Thread(() -> {
+		RELEASE_EXECUTOR.execute(() -> {
 			synchronized (lifecycleLock) {
 				try {
 					logDebug("Liberando recursos nativos em background para: " + this.camera.getName());
@@ -375,7 +382,7 @@ public class CameraPanel extends JPanel {
 					System.err.println("Aviso: Erro ao liberar recursos nativos da camera " + this.camera.getName());
 				}
 			}
-		}, "VMSLite-Release-" + this.camera.getName()).start();
+		});
 	}
 
 	public Camera getConfig() {
