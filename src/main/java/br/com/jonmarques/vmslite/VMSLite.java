@@ -15,12 +15,16 @@ import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class VMSLite extends JFrame {
 
@@ -167,8 +171,8 @@ public class VMSLite extends JFrame {
 		int indexDestino = cameras.indexOf(destino);
 
 		if (indexOrigem != -1 && indexDestino != -1) {
-			java.util.Collections.swap(cameras, indexOrigem, indexDestino);
-			java.util.Collections.swap(vmsconfig.getCameras(), indexOrigem, indexDestino);
+			Collections.swap(cameras, indexOrigem, indexDestino);
+			Collections.swap(vmsconfig.getCameras(), indexOrigem, indexDestino);
 			saveConfigs();
 		}
 		rebuildLayout();
@@ -603,7 +607,7 @@ public class VMSLite extends JFrame {
 		int maxRowUsada = rows;
 		int maxColUsada = cols;
 
-		java.util.Map<CameraPanel, Point> posicoes = new java.util.HashMap<>();
+		Map<CameraPanel, Point> posicoes = new HashMap<>();
 
 		for (CameraPanel panel : cameras) {
 			Camera cam = panel.getConfig();
@@ -707,6 +711,7 @@ public class VMSLite extends JFrame {
 			        saveConfigs();
 
 			        if (!newUrl.equals(oldUrl)) {
+			        	
 			            panel.setArrastando(true);
 			            SwingUtilities.invokeLater(() -> {
 			                panel.setArrastando(false);
@@ -715,6 +720,14 @@ public class VMSLite extends JFrame {
 			        }
 
 			        rebuildLayout();
+			        
+			        String newIp = OnvifDiscoveryService.extrairIpDaUrl(newUrl);
+			        String oldIp = OnvifDiscoveryService.extrairIpDaUrl(oldUrl);
+			        if (newIp != null && oldIp != null && !newIp.equals(oldIp)) {
+			        	logDebug("IP " + oldIp + " foi editado para " + newIp + ", setando UUID para null.");
+			        	config.setUuid(null);
+			        	saveConfigs();
+			        }
 
 			    } catch (NumberFormatException ex) {
 			        JOptionPane.showMessageDialog(this,
@@ -764,23 +777,22 @@ public class VMSLite extends JFrame {
 
 				botaoMenu.setEnabled(true);
 				botaoMenu.setText("Buscar ONVIF 🔍");
-
-				java.util.Set<String> ipsConectados = new java.util.HashSet<>();
+				Set<String> ipsConectados = new HashSet<>();
 				if (vmsconfig.getCameras() != null) {
-					for (br.com.jonmarques.vmslite.entity.Camera cam : vmsconfig.getCameras()) {
-						java.util.regex.Matcher m = java.util.regex.Pattern.compile("@(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})")
+					for (Camera cam : vmsconfig.getCameras()) {
+						Matcher m = Pattern.compile("@(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})")
 								.matcher(cam.getUrl());
 						if (m.find()) {
 							ipsConectados.add(m.group(1));
 						} else {
-							java.util.regex.Matcher mSemUser = java.util.regex.Pattern.compile("rtsp://(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})")
+							Matcher mSemUser = Pattern.compile("rtsp://(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})")
 									.matcher(cam.getUrl());
 							if (mSemUser.find()) ipsConectados.add(mSemUser.group(1));
 						}
 					}
 				}
 
-				java.util.List<String> ipsFiltrados = new java.util.ArrayList<>();
+				List<String> ipsFiltrados = new ArrayList<>();
 				for (String ip : dispositivos.keySet()) {
 					if (!ipsConectados.contains(ip)) {
 						ipsFiltrados.add(ip);
