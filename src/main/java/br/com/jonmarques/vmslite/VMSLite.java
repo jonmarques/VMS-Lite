@@ -75,7 +75,7 @@ public class VMSLite extends JFrame {
 	    
 		String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
 		addToStartup("VMSLite", exePath);
-
+		
 		System.setProperty("sun.java2d.opengl", "true");
 		System.setProperty("swing.bufferPerWindow", "true");
 		System.setProperty("sun.java2d.noddraw", "true");
@@ -160,6 +160,9 @@ public class VMSLite extends JFrame {
 		}).start();
 
 		toggleFullscreen();
+		
+		AppWatchdog.start();
+		ExternalWatchdogInstaller.install();
 	}
 
 	public boolean isFullscreen() {
