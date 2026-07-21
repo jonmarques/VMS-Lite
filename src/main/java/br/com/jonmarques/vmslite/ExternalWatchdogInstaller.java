@@ -33,7 +33,7 @@ import java.nio.file.StandardOpenOption;
  */
 public final class ExternalWatchdogInstaller {
 
-	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
+	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");;
 	private static final String TASK_NAME = "VMSLiteWatchdog";
 
 	private ExternalWatchdogInstaller() {
@@ -48,6 +48,7 @@ public final class ExternalWatchdogInstaller {
 		}
 
 		try {
+
 			if (taskAlreadyExists()) {
 				logDebug("Tarefa Agendada '" + TASK_NAME + "' já existe. Nada a fazer.");
 				return;
@@ -60,6 +61,7 @@ public final class ExternalWatchdogInstaller {
 		} catch (Exception e) {
 			logDebug("Falha ao instalar watchdog externo: " + e.getMessage());
 		}
+
 	}
 
 	// ---------- Verifica se a tarefa já existe ----------
@@ -174,39 +176,42 @@ public final class ExternalWatchdogInstaller {
 	// ---------- Registra a Tarefa Agendada ----------
 
 	private static void registerScheduledTask(Path vbsPath)
-			throws IOException, InterruptedException {
+	        throws IOException, InterruptedException {
 
-		String taskCommand = vbsPath.toAbsolutePath().toString();
+	    // Caminho do vbs com aspas devidamente escapadas para o parser do schtasks
+	    String vbsAbsolutePath = vbsPath.toAbsolutePath().toString();
+	    
+	    // Sintaxe correta para o /tr lidar com caminhos contendo espaços
+	    String taskCommand = "C:\\Windows\\System32\\wscript.exe \"\"\"" + vbsAbsolutePath + "\"\"\"";
 
-		ProcessBuilder pb = new ProcessBuilder(
-				"schtasks",
-				"/create",
-				"/tn", TASK_NAME,
-				"/tr", taskCommand,
-				"/sc", "MINUTE",
-				"/mo", "1",
-				"/rl", "LIMITED",
-				"/f"
-				);
+	    ProcessBuilder pb = new ProcessBuilder(
+	            "schtasks",
+	            "/create",
+	            "/tn", TASK_NAME,
+	            "/tr", taskCommand,
+	            "/sc", "MINUTE",
+	            "/mo", "1",
+	            "/rl", "LIMITED",
+	            "/f"
+	    );
 
-		pb.redirectErrorStream(true);
+	    pb.redirectErrorStream(true);
 
-		Process p = pb.start();
+	    Process p = pb.start();
 
-		String output = new String(
-				p.getInputStream().readAllBytes(),
-				StandardCharsets.UTF_8
-				);
+	    String output = new String(
+	            p.getInputStream().readAllBytes(),
+	            StandardCharsets.UTF_8
+	    );
 
-		int exitCode = p.waitFor();
+	    int exitCode = p.waitFor();
 
-		if (exitCode != 0) {
-			throw new IOException(
-					"schtasks retornou código "
-							+ exitCode + ": " + output);
-		}
+	    if (exitCode != 0) {
+	        throw new IOException(
+	                "schtasks retornou código "
+	                        + exitCode + ": " + output);
+	    }
 	}
-
 	/**
 	 * Opcional: remove a Tarefa Agendada, caso você queira dar essa opção
 	 * ao usuário num botão de "desinstalar watchdog" ou no desinstalador
