@@ -1,19 +1,16 @@
 package br.com.jonmarques.vmslite;
 
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory;
-import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent;
+import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent;
 import uk.co.caprica.vlcj.player.component.InputEvents;
-import uk.co.caprica.vlcj.player.component.callback.CallbackImagePainter;
-import uk.co.caprica.vlcj.player.embedded.fullscreen.FullScreenStrategy;
 
 public final class VlcManager {
-
     private static MediaPlayerFactory factory;
 
     private VlcManager() {
-    	Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-    	    VlcManager.shutdown();
-    	}));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            VlcManager.shutdown();
+        }));
     }
 
     public static synchronized void init() {
@@ -22,16 +19,16 @@ public final class VlcManager {
         }
     }
 
-    public static CallbackMediaPlayerComponent createPlayer() {
+    public static EmbeddedMediaPlayerComponent createPlayer() {
         if (factory == null) {
             init();
         }
-        return new CallbackMediaPlayerComponent(
+        return new EmbeddedMediaPlayerComponent(
                 factory,
-                (FullScreenStrategy) null,
+                null,                          // FullScreenStrategy
+                null,                          // JWindow (overlay), não usado
                 InputEvents.DISABLE_NATIVE,
-                false,
-                (CallbackImagePainter) null
+                null                           // VideoSurfaceComponent customizado, deixa padrão
         );
     }
 

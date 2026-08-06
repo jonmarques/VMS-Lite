@@ -57,12 +57,6 @@ public class VMSLite extends JFrame {
 	public VMSLite() {
 
 		super("VMS Lite");
-
-	    if (!SingleInstance.lock()) {
-	        System.exit(0);
-	    }
-
-	    Runtime.getRuntime().addShutdownHook(new Thread(SingleInstance::unlock));
 		
 		setSize(1400, 900);
 		setLocationRelativeTo(null);
@@ -72,9 +66,6 @@ public class VMSLite extends JFrame {
 
 		// 2. Torna a janela visível imediatamente para exibir o feedback visual
 		setVisible(true);
-	    
-		String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
-		addToStartup("VMSLite", exePath);
 		
 		System.setProperty("sun.java2d.opengl", "true");
 		System.setProperty("swing.bufferPerWindow", "true");
@@ -214,16 +205,16 @@ public class VMSLite extends JFrame {
 		add(mainContainer, BorderLayout.CENTER);
 		cardLayout.show(mainContainer, "LOADING");
 
+		// No construtor ou inicialização de atributos:
+		this.resizeDebounce = new Timer(80, ev -> rebuildLayout());
+		this.resizeDebounce.setRepeats(false);
+
+		// No listener:
 		camerasPanel.addComponentListener(new ComponentAdapter() {
-			@Override
-			public void componentResized(ComponentEvent e) {
-				if (resizeDebounce != null) {
-					resizeDebounce.stop();
-				}
-				resizeDebounce = new Timer(80, ev -> rebuildLayout());
-				resizeDebounce.setRepeats(false);
-				resizeDebounce.start();
-			}
+		    @Override
+		    public void componentResized(ComponentEvent e) {
+		        resizeDebounce.restart(); // restart() cancela o timer anterior se estivesse rodando e inicia do zero
+		    }
 		});
 
 		// --- Barra Superior ---
@@ -581,8 +572,21 @@ public class VMSLite extends JFrame {
 
 		revalidate();
 		repaint();
+
+		reconectarCamerasAposToggleFullscreen(); // <-- adicionar
 	}
 
+	
+	private void reconectarCamerasAposToggleFullscreen() {
+		// O dispose()/setVisible() destrói e recria os peers nativos (Canvas) de
+		// cada CameraPanel. O libvlc perde a referência da superfície de vídeo
+		// e precisa ser reconectado + reiniciado, senão fica em tela preta.
+		SwingUtilities.invokeLater(() -> {
+			for (CameraPanel panel : cameras) {
+				panel.reiniciarAposMudancaDeJanela();
+			}
+		});
+	}
 	public void rebuildLayout() {
 		int rows = vmsconfig.getLayoutRows();
 		int cols = vmsconfig.getLayoutCols();
@@ -995,7 +999,16 @@ public class VMSLite extends JFrame {
 	}
 
 	public static void main(String[] args) {
-		SwingUtilities.invokeLater(VMSLite::new);
+	    // Executa validações de instância única e registros no SO antes de criar a UI
+	    if (!SingleInstance.lock()) {
+	        System.exit(0);
+	    }
+	    Runtime.getRuntime().addShutdownHook(new Thread(SingleInstance::unlock));
+
+	    String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
+	    addToStartup("VMSLite", exePath);
+
+	    SwingUtilities.invokeLater(VMSLite::new);
 	}
 
 	public static VMSLite getInstance() {

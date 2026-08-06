@@ -3,10 +3,11 @@ package br.com.jonmarques.vmslite;
 import br.com.jonmarques.vmslite.entity.Camera;
 import br.com.jonmarques.vmslite.listener.GridDragListener;
 import br.com.jonmarques.vmslite.service.OnvifDiscoveryService;
+import uk.co.caprica.vlcj.media.MediaStatistics;
 import uk.co.caprica.vlcj.player.base.MediaPlayer;
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter;
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventListener;
-import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent;
+import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -29,9 +30,29 @@ import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 
 public class CameraPanel extends JPanel {
-	
+
 	private static final long serialVersionUID = 1L;
 	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
+
+	private static final ScheduledExecutorService WATCHDOG_EXECUTOR = Executors.newScheduledThreadPool(
+			2,
+			new ThreadFactory() {
+				private int count = 1;
+				@Override
+				public Thread newThread(Runnable runnable) {
+					Thread thread = new Thread(runnable, "VMSLite-Watchdog-" + count++);
+					thread.setDaemon(true);
+					return thread;
+				}
+			});
+
+	private static final long WATCHDOG_INTERVAL_SECONDS = 6;
+	private static final int FREEZE_THRESHOLD_TICKS = 3;
+
+	private volatile ScheduledFuture<?> watchdogTask;
+	private long lastKnownTime = -1;
+	private int freezeTicks = 0;
+
 	private static final ScheduledExecutorService RECONNECT_EXECUTOR = Executors.newScheduledThreadPool(
 			4,
 			new ThreadFactory() {
@@ -46,48 +67,48 @@ public class CameraPanel extends JPanel {
 			});
 
 	private static final ExecutorService RELEASE_EXECUTOR =
-		    Executors.newFixedThreadPool(3, r -> {
-		        Thread t = new Thread(r, "camera-release");
-		        t.setDaemon(true);
-		        return t;
-		    });
-	
+			Executors.newFixedThreadPool(3, r -> {
+				Thread t = new Thread(r, "camera-release");
+				t.setDaemon(true);
+				return t;
+			});
+
 	private static final String[] MEDIA_OPTIONS = new String[]{
-	         ":network-caching=1000",           
-	         ":live-caching=1000",
+			":network-caching=1000",      // Mantém o buffer fixo em 1 segundo
+			":live-caching=1000",
 
-	         ":clock-synchro=1",               
-	         ":clock-jitter=0",                
+			":clock-synchro=1",
+			":clock-jitter=500",
 
-	         ":framedrop",  
-	         ":drop-late-frames",
+			":framedrop",                // Permite descartar quadros da fila se acumular atraso
+			":drop-late-frames",         // Se o vídeo ficar >1s atrás do tempo real, pula para o I-Frame atual
 
-	         ":avcodec-hw=none",
-	         ":avcodec-fast",
-	         ":avcodec-threads=1",          
-	         ":avcodec-skiploopfilter=4",
-	         
-	         ":audio-track-id=-1",             
-	         ":no-audio-time-sync",            
+			":avcodec-hw=any",           // Tenta aceleração por hardware
+			":avcodec-fast",
+			":avcodec-threads=2",
+			":avcodec-skiploopfilter=0",
 
-	         ":rtsp-tcp", 
-	         ":no-video-title-show",
-	         ":rtsp-timeout=8",
-	         ":network-timeout=8000"
-	   };
-	
+			":audio-track-id=-1",
+			":no-audio-time-sync",
+
+			":rtsp-tcp",
+			":no-video-title-show",
+			":rtsp-timeout=5",
+			":network-timeout=5000"
+	};
+
 	private final Camera camera;
-	private final CallbackMediaPlayerComponent player;
+	private final EmbeddedMediaPlayerComponent player;
 	private final JLabel loadingLabel;
 	private final Object lifecycleLock = new Object();
 	private final VMSLite vmslite;
-	
+
 	private volatile boolean reconnecting = false;
 	private volatile boolean released = false;
 	private volatile boolean bootInicializado = false;
 
 	private MediaPlayerEventListener currentListener;
-	private ScheduledFuture<?> reconnectTask;
+	private volatile ScheduledFuture<?> reconnectTask;
 	private int reconnectAttempts = 0;
 
 	public CameraPanel(final VMSLite vmslite, Camera camera) {
@@ -134,6 +155,11 @@ public class CameraPanel extends JPanel {
 		};
 
 		GridDragListener dragListener = new GridDragListener(vmslite, this);
+
+		// IMPORTANTE: com EmbeddedMediaPlayerComponent, videoSurfaceComponent() é
+		// um Canvas heavyweight, que captura os eventos de mouse antes deles
+		// chegarem ao JLayeredPane. Por isso é necessário registrar os listeners
+		// DIRETAMENTE nele também, não só no layer.
 		Component videoSurface = this.player.videoSurfaceComponent();
 		if (videoSurface != null) {
 			videoSurface.addMouseListener(mouseAdapter);
@@ -153,13 +179,16 @@ public class CameraPanel extends JPanel {
 		this.loadingLabel.addMouseListener(mouseAdapter);
 		this.loadingLabel.addMouseListener(dragListener);
 		this.loadingLabel.addMouseMotionListener(dragListener);
+
 		layer.addMouseListener(mouseAdapter);
 		layer.addMouseListener(dragListener);
 		layer.addMouseMotionListener(dragListener);
+
 		this.addMouseListener(mouseAdapter);
 		this.addMouseListener(dragListener);
 		this.addMouseMotionListener(dragListener);
 	}
+
 
 	private void verificarClique(MouseEvent e, VMSLite vmslite) {
 		if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
@@ -168,27 +197,29 @@ public class CameraPanel extends JPanel {
 	}
 
 	public void setArrastando(boolean arrastando) {
-		if (arrastando) {
-			this.player.setVisible(false);
-			this.loadingLabel.setText("Movendo: " + this.camera.getName());
-			this.loadingLabel.setBackground(new Color(30, 144, 255, 200));
-			if (!loadingLabel.isVisible()) {
-			    loadingLabel.setVisible(true);
-			}
-		} else {
-			this.player.setVisible(true);
-			this.loadingLabel.setBackground(new Color(0, 0, 0, 180));
-			if (loadingLabel.isVisible()) {
-			    loadingLabel.setVisible(false);
-			}		
-		}
-		this.repaint();
+	    SwingUtilities.invokeLater(() -> {
+	        if (arrastando) {
+	            this.player.setVisible(false);
+	            this.loadingLabel.setText("Movendo: " + this.camera.getName());
+	            this.loadingLabel.setBackground(new Color(30, 144, 255, 200));
+	            if (!loadingLabel.isVisible()) {
+	                loadingLabel.setVisible(true);
+	            }
+	        } else {
+	            this.player.setVisible(true);
+	            this.loadingLabel.setBackground(new Color(0, 0, 0, 180));
+	            if (loadingLabel.isVisible()) {
+	                loadingLabel.setVisible(false);
+	            }       
+	        }
+	        this.repaint();
+	    });
 	}
 
 	public void start() {
 		SwingUtilities.invokeLater(() -> {
 			if (!loadingLabel.isVisible()) {
-			    loadingLabel.setVisible(true);
+				loadingLabel.setVisible(true);
 			}
 			this.loadingLabel.setText("Carregando...");
 		});
@@ -203,16 +234,18 @@ public class CameraPanel extends JPanel {
 				CameraPanel.this.reconnecting = false;
 				CameraPanel.this.cancelReconnectTask();
 
-				// Correção: Sempre atualizar componentes Swing (loadingLabel) dentro da EDT
 				SwingUtilities.invokeLater(() -> {
 					synchronized (CameraPanel.this.lifecycleLock) {
 						if (CameraPanel.this.released) return;
 						if (loadingLabel.isVisible()) {
-						    loadingLabel.setVisible(false);
-						}						CameraPanel.this.player.mediaPlayer().video().setAspectRatio(null);
+							loadingLabel.setVisible(false);
+						}
+						CameraPanel.this.player.mediaPlayer().video().setAspectRatio(null);
 					}
 				});
 				CameraPanel.this.bootInicializado = true;
+
+				CameraPanel.this.iniciarWatchdog();
 			}
 
 			@Override
@@ -222,7 +255,7 @@ public class CameraPanel extends JPanel {
 
 					SwingUtilities.invokeLater(() -> {
 						if (!loadingLabel.isVisible()) {
-						    loadingLabel.setVisible(true);
+							loadingLabel.setVisible(true);
 						}
 						CameraPanel.this.loadingLabel.setText("Reconectando...");
 					});
@@ -268,6 +301,83 @@ public class CameraPanel extends JPanel {
 				this.player.mediaPlayer().media().play(this.camera.getUrl(), MEDIA_OPTIONS);
 			}
 		}
+
+	}
+
+	private void iniciarWatchdog() {
+		cancelarWatchdog();
+		lastKnownTime = -1;
+		freezeTicks = 0;
+
+		watchdogTask = WATCHDOG_EXECUTOR.scheduleWithFixedDelay(
+				this::checarCongelamento,
+				WATCHDOG_INTERVAL_SECONDS,
+				WATCHDOG_INTERVAL_SECONDS,
+				TimeUnit.SECONDS);
+	}
+
+	private void cancelarWatchdog() {
+		ScheduledFuture<?> task = watchdogTask;
+		if (task != null) {
+			task.cancel(false);
+			watchdogTask = null;
+		}
+	}
+
+	private void checarCongelamento() {
+		try {
+			if (released || reconnecting || !bootInicializado) {
+				return;
+			}
+
+			MediaPlayer mp = player.mediaPlayer();
+			if (mp == null) {
+				return;
+			}
+
+			boolean playing = mp.status().isPlaying();
+			if (!playing) {
+				freezeTicks = 0;
+				return;
+			}
+
+			long displayedPictures = obterFramesDecodificados(mp);
+
+			if (displayedPictures < 0) {
+				// não conseguiu ler estatísticas, evita falso positivo
+				return;
+			}
+
+			if (displayedPictures == lastKnownTime) {
+				freezeTicks++;
+				logDebug("Watchdog: frames parados em " + displayedPictures
+						+ " (" + freezeTicks + "/" + FREEZE_THRESHOLD_TICKS + ") para " + camera.getName());
+			} else {
+				freezeTicks = 0;
+			}
+
+			lastKnownTime = displayedPictures;
+
+			if (freezeTicks >= FREEZE_THRESHOLD_TICKS) {
+				logDebug("Watchdog: CONGELAMENTO detectado para " + camera.getName() + ". Forçando reconexão.");
+				freezeTicks = 0;
+				mp.submit(this::reconnect);
+			}
+		} catch (Throwable t) {
+			logDebug("Erro inesperado no Watchdog de " + camera.getName() + ": " + t.getMessage());
+		}
+	}
+
+	private long obterFramesDecodificados(MediaPlayer mp) {
+		try {
+			MediaStatistics stats = mp.media().info().statistics();
+			if (stats == null) {
+				return -1;
+			}
+			return stats.picturesDisplayed();
+		} catch (Exception e) {
+			return -1;
+		}
 	}
 
 	private void reconnect() {
@@ -277,6 +387,8 @@ public class CameraPanel extends JPanel {
 
 		this.reconnecting = true;
 		this.reconnectAttempts = 0;
+		cancelarWatchdog(); // <-- para de checar enquanto reconecta
+
 		this.reconnectTask = RECONNECT_EXECUTOR.scheduleWithFixedDelay(
 				this::tryReconnect,
 				5,
@@ -293,7 +405,7 @@ public class CameraPanel extends JPanel {
 		SwingUtilities.invokeLater(() -> {
 			if (!this.released) {
 				if (!loadingLabel.isVisible()) {
-				    loadingLabel.setVisible(true);
+					loadingLabel.setVisible(true);
 				}
 				this.loadingLabel.setText("Reconectando...");
 			}
@@ -303,21 +415,23 @@ public class CameraPanel extends JPanel {
 			return;
 		}
 
+		boolean podeExecutar = false;
 		synchronized (lifecycleLock) {
-			if (this.released || !this.reconnecting || this.player.mediaPlayer() == null) {
-				return;
-			}
+		    if (!this.released && this.reconnecting && this.player.mediaPlayer() != null) {
+		        podeExecutar = true;
+		    }
+		}
 
-			this.reconnectAttempts++;
+		if (podeExecutar) {
+		    this.reconnectAttempts++;
+		    if (this.reconnectAttempts % 3 == 0) {
+		        logDebug("Forcando hard reset de midia nativa para: " + camera.getName());
+		        this.player.mediaPlayer().media().prepare(this.camera.getUrl(), MEDIA_OPTIONS);
+		    } else if (this.reconnectAttempts >= 5 && this.reconnectAttempts % 10 == 0) {
+		        atualizarIpPorUuid();
+		    }
 
-			if (this.reconnectAttempts % 3 == 0) {
-				logDebug("Forcando hard reset de midia nativa para: " + camera.getName());
-				this.player.mediaPlayer().media().prepare(this.camera.getUrl(), MEDIA_OPTIONS);
-			} else if (this.reconnectAttempts >= 5 && this.reconnectAttempts % 10 == 0) {
-				atualizarIpPorUuid();
-			}
-
-			this.player.mediaPlayer().media().play(this.camera.getUrl(), MEDIA_OPTIONS);
+		    this.player.mediaPlayer().media().play(this.camera.getUrl(), MEDIA_OPTIONS);
 		}
 	}
 
@@ -356,84 +470,100 @@ public class CameraPanel extends JPanel {
 
 	public Future<?> stop() {
 
-	    released = true;
-	    reconnecting = false;
+		released = true;
+		reconnecting = false;
 
-	    cancelReconnectTask();
+		cancelReconnectTask();
+		cancelarWatchdog();
 
+		try {
+			if(currentListener != null){
 
-	    try {
-	        if(currentListener != null){
+				player.mediaPlayer()
+				.events()
+				.removeMediaPlayerEventListener(currentListener);
 
-	            player.mediaPlayer()
-	                  .events()
-	                  .removeMediaPlayerEventListener(currentListener);
+				currentListener = null;
+			}
 
-	            currentListener = null;
-	        }
-
-	    } catch(Exception ignored){}
-
-
-	    if(RELEASE_EXECUTOR.isShutdown()){
-	        return null;
-	    }
+		} catch(Exception ignored){}
 
 
-	    return RELEASE_EXECUTOR.submit(() -> {
-
-	        try {
-
-	            MediaPlayer mp = player.mediaPlayer();
+		if(RELEASE_EXECUTOR.isShutdown()){
+			return null;
+		}
 
 
-	            if(mp != null){
+		return RELEASE_EXECUTOR.submit(() -> {
 
-	                try {
-	                    mp.controls().stop();
-	                } catch(Exception ignored){}
+			try {
 
-
-	                Thread.sleep(200);
-	            }
+				MediaPlayer mp = player.mediaPlayer();
 
 
-	            player.release();
+				if(mp != null){
+
+					try {
+						mp.controls().stop();
+					} catch(Exception ignored){}
 
 
-	        }catch(Exception e){
+					Thread.sleep(200);
+				}
 
-	            System.err.println(
-	                "Erro liberando "+camera.getName()
-	            );
-	        }
 
-	    });
+				player.release();
+
+
+			}catch(Exception e){
+
+				System.err.println(
+						"Erro liberando "+camera.getName()
+						);
+			}
+
+		});
+	}
+
+	public void reiniciarAposMudancaDeJanela() {
+		synchronized (lifecycleLock) {
+			if (released) {
+				return;
+			}
+
+			MediaPlayer mp = player.mediaPlayer();
+			if (mp == null) {
+				return;
+			}
+
+			mp.submit(() -> {
+				mp.media().play(camera.getUrl(), MEDIA_OPTIONS);
+			});
+		}
 	}
 
 	public Camera getConfig() {
 		return this.camera;
 	}
-	
+
 	public static void shutdownExecutors(){
 
-	    RECONNECT_EXECUTOR.shutdownNow();
+		RECONNECT_EXECUTOR.shutdownNow();
+		WATCHDOG_EXECUTOR.shutdownNow();
+		RELEASE_EXECUTOR.shutdown();
 
+		try {
 
-	    RELEASE_EXECUTOR.shutdown();
+			if(!RELEASE_EXECUTOR.awaitTermination(5, TimeUnit.SECONDS)){
+				RELEASE_EXECUTOR.shutdownNow();
+			}
 
-	    try {
+		} catch (InterruptedException e) {
 
-	        if(!RELEASE_EXECUTOR.awaitTermination(5, TimeUnit.SECONDS)){
-	            RELEASE_EXECUTOR.shutdownNow();
-	        }
+			Thread.currentThread().interrupt();
+			RELEASE_EXECUTOR.shutdownNow();
 
-	    } catch (InterruptedException e) {
-
-	        Thread.currentThread().interrupt();
-	        RELEASE_EXECUTOR.shutdownNow();
-
-	    }
+		}
 
 	}
 
