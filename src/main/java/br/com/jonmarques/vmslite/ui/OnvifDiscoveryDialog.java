@@ -69,10 +69,13 @@ public final class OnvifDiscoveryDialog {
                 DefaultListModel<String> listModel = new DefaultListModel<>();
                 for (String ip : ipsFiltrados) {
                     String uuid = dispositivos.get(ip).getUuid();
-                    String uuidExibicao = (uuid == null || uuid.isBlank()) ? "Sem UUID Visível" : uuid;
-
-                    listModel.addElement(ip + "  - [" + uuidExibicao + "]");
-                }
+                    String uuidExibicao = (uuid == null || uuid.isBlank()) ? "MAC não informado" : uuid.substring(uuid.length() - 12, uuid.length()).replaceAll("(.{2})", "$1-");
+                    if(uuidExibicao.endsWith("-")) uuidExibicao = uuidExibicao.substring(0, uuidExibicao.length() - 1);
+                    String name = dispositivos.get(ip).getName();
+                    String deviceName = name == null || name.isBlank() ? "Nome não informado" : name;
+                    listModel.addElement(
+                    	    "<html>" + ip + " - <b>" + deviceName + "</b> [" + uuidExibicao + "]</html>");
+                    }
 
                 JList<String> deviceList = new JList<>(listModel);
                 deviceList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
@@ -90,7 +93,13 @@ public final class OnvifDiscoveryDialog {
 
                 painelJanela.add(topoPainel, BorderLayout.NORTH);
                 painelJanela.add(scrollPane, BorderLayout.CENTER);
-                painelJanela.add(new JLabel("💡 Dica: Segure CTRL para selecionar múltiplas câmeras."), BorderLayout.SOUTH);
+                JTextArea status = new JTextArea(OnvifDiscoveryService.getLastDiscoveryStatus());
+                status.setEditable(false);
+                status.setLineWrap(true);
+                status.setWrapStyleWord(true);
+                status.setOpaque(false);
+                status.setRows(3);
+                painelJanela.add(status, BorderLayout.SOUTH);
 
                 btnRecarregar.addActionListener(ev -> {
                     Component comp = (Component) ev.getSource();
@@ -100,7 +109,8 @@ public final class OnvifDiscoveryDialog {
                 });
 
                 if (ipsFiltrados.isEmpty()) {
-                    listModel.addElement("Nenhum dispositivo novo encontrado.");
+                    listModel.addElement(dispositivos.isEmpty() ? "Nenhuma camera respondeu a busca."
+                            : "Todos os " + dispositivos.size() + " dispositivos encontrados ja estao cadastrados.");
                     deviceList.setEnabled(false);
                 }
 

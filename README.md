@@ -46,7 +46,17 @@ Os controles de pausa/retomada e avanco aparecem sobre o canto inferior direito 
 
 O intervalo e contado entre trocas de destaque. O tour nao solicita recarregamento nas trocas; cameras ainda conectando ou instaveis podem continuar mostrando carregamento. Todas permanecem decodificando, portanto CPU/RAM podem aumentar em relacao ao tour anterior de player unico. As opcoes existentes de caching permanecem inalteradas. Camera offline nao interrompe a sequencia.
 
-## Testes Locais
+## Busca ONVIF
+
+A descoberta usa WS-Discovery 2005/04 com WS-Addressing 2004/08, MessageID unico, ReplyTo anonimo e destino `urn:schemas-xmlsoap-org:ws:2005:04:discovery`, conforme os exemplos da [especificacao de testes ONVIF](https://www.onvif.org/wp-content/uploads/2021/06/ONVIF_Base_Device_Test_Specification_21.06.pdf).
+
+Cada endereco IPv4 ativo com suporte a multicast envia consultas para `239.255.255.250:3702` pela propria interface. Uma unica thread recebe as respostas, com prazo global de 6 segundos e tres rodadas de consultas para os tipos NetworkVideoTransmitter e Device. As buscas simultaneas continuam compartilhadas; o limite de reconexao foi mantido. Resultados vazios nao recebem cache de 30 segundos. Respostas invalidas sao ignoradas e os endpoints anunciados no IP que respondeu tem preferencia.
+
+A janela mostra a quantidade de interfaces pesquisadas, dispositivos encontrados e eventuais erros de acesso. Dispositivos ja cadastrados sao diferenciados de uma busca sem respostas. A busca nao altera regras de firewall. ONVIF desabilitado na camera, isolamento de rede, VLANs ou bloqueios de multicast ainda podem impedir a descoberta.
+
+O teste `br.com.jonmarques.vmslite.service.OnvifDiscoveryChecks` verifica mensagens, XML, endpoints e respostas UDP locais com perda simulada de pacotes. O argumento opcional `--network` executa uma descoberta real e informa contagens, sem adicionar cameras ou acessar suas credenciais.
+
+## Verificacao Local
 
 Ao passar o mouse sobre qualquer camera, um indicador sobreposto mostra o estado de conexao, FPS exibido e taxa de midia recebida em Mbps. As taxas sao calculadas pela diferenca dos contadores VLC entre amostras, aproximadamente uma vez por segundo, apenas para a camera sob o mouse. A primeira amostra, reconexoes e estatisticas indisponiveis mostram `--`. A taxa de midia nao inclui todo o overhead de rede. O indicador nao reduz a imagem e fica oculto fora da camera ou com o aplicativo inativo.
 

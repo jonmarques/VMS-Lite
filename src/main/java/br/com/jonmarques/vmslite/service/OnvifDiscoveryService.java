@@ -1,7 +1,5 @@
 package br.com.jonmarques.vmslite.service;
 
-import java.net.*;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -56,87 +54,30 @@ public class OnvifDiscoveryService {
         }
     }
 
+    private static volatile String lastDiscoveryStatus = "";
+    public static String getLastDiscoveryStatus() { return lastDiscoveryStatus; }
+
     private static void startDiscoveryThread(CompletableFuture<Map<String, DeviceInfo>> future) {
         Thread discoveryThread = new Thread(() -> {
-            logDebug("Iniciando descoberta de dispositivos ONVIF (WS-Discovery)...");
-            Map<String, DeviceInfo> dispositivosEncontrados = new HashMap<>();
-            DatagramSocket socket = null;
-
+            Map<String, DeviceInfo> found = new HashMap<>();
             try {
-                socket = new DatagramSocket();
-                socket.setSoTimeout(4000);
-
-                String probeRequest = "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-                        + "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:a=\"http://www.w3.org/2005/08/addressing\">"
-                        + "<s:Header>"
-                        + "<a:Action s:mustUnderstand=\"1\">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action>"
-                        + "<a:To s:mustUnderstand=\"1\">urn:schemas-xmlsoap.org:ws:2005/04/discovery</a:To>"
-                        + "</s:Header>"
-                        + "<s:Body>"
-                        + "<Probe xmlns=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\">"
-                        + "<Types xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\">dn:NetworkVideoTransmitter</Types>"
-                        + "</Probe>"
-                        + "</s:Body>"
-                        + "</s:Envelope>";
-
-                byte[] sendData = probeRequest.getBytes(StandardCharsets.UTF_8);
-                InetAddress multicastAddress = InetAddress.getByName("239.255.255.250");
-
-                DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, multicastAddress, 3702);
-                socket.send(sendPacket);
-
-                byte[] recvBuf = new byte[8192];
-                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(4);
-                while (System.nanoTime() < deadline) {
-                    socket.setSoTimeout((int) Math.max(1, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())));
-                    try {
-                        DatagramPacket receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
-                        socket.receive(receivePacket);
-
-                        String response = new String(receivePacket.getData(), 0, receivePacket.getLength(), StandardCharsets.UTF_8);
-                        String deviceIp = receivePacket.getAddress().getHostAddress();
-
-                        if (!dispositivosEncontrados.containsKey(deviceIp)) {
-                            logDebug("Dispositivo ONVIF respondendo no IP: " + deviceIp);
-                            var xml = OnvifXml.parse(response);
-                            String xaddr = OnvifXml.text(xml, "XAddrs");
-                            if (xaddr != null) xaddr = xaddr.split("\\s+")[0];
-                            if (xaddr == null || xaddr.isBlank()) {
-                                xaddr = "http://" + deviceIp + "/onvif/device_service";
-                            }
-
-                            String uuid = OnvifXml.deviceUuid(xml);
-                            if (uuid != null) {
-                                logDebug("UUID do dispositivo " + deviceIp + ": " + uuid);
-                            } else {
-                                logDebug("Dispositivo " + deviceIp + " nao retornou UUID no ProbeMatch.");
-                            }
-
-                            dispositivosEncontrados.put(deviceIp, new DeviceInfo(xaddr, uuid));
-                        }
-                    } catch (java.net.SocketTimeoutException e) {
-                        logDebug("Varredura de rede finalizada.");
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                System.err.println("Erro na descoberta de dispositivos: " + e.getMessage());
+                WsDiscoveryScanner.Result result = WsDiscoveryScanner.scan();
+                found.putAll(result.devices());
+                lastDiscoveryStatus = "Interfaces pesquisadas: " + result.interfaces() + ". Dispositivos encontrados: "
+                        + found.size() + "." + (result.errors().isEmpty() ? "" : " Avisos: " + String.join("; ", result.errors()));
+                logDebug(lastDiscoveryStatus);
+            } catch (RuntimeException error) {
+                lastDiscoveryStatus = "Nao foi possivel concluir a busca: " + error.getClass().getSimpleName();
+                System.err.println(lastDiscoveryStatus);
             } finally {
-                if (socket != null && !socket.isClosed()) {
-                    socket.close();
-                }
-
                 synchronized (DISCOVERY_LOCK) {
-                    cachedDevices = new HashMap<>(dispositivosEncontrados);
-                    cachedAt = System.currentTimeMillis();
-                    if (discoveryInProgress == future) {
-                        discoveryInProgress = null;
-                    }
+                    cachedDevices = new HashMap<>(found);
+                    cachedAt = found.isEmpty() ? 0 : System.currentTimeMillis();
+                    if (discoveryInProgress == future) discoveryInProgress = null;
                 }
-                future.complete(dispositivosEncontrados);
+                future.complete(found);
             }
         }, "OnvifDiscovery");
-
         discoveryThread.setDaemon(true);
         discoveryThread.start();
     }
@@ -154,14 +95,21 @@ public class OnvifDiscoveryService {
     public static class DeviceInfo {
         private final String xaddr;
         private final String uuid;
+        private final String name;
 
         public DeviceInfo(String xaddr, String uuid) {
+            this(xaddr, uuid, null);
+        }
+
+        public DeviceInfo(String xaddr, String uuid, String name) {
             this.xaddr = xaddr;
             this.uuid = uuid;
+            this.name = name;
         }
 
         public String getXaddr() { return xaddr; }
         public String getUuid() { return uuid; }
+        public String getName() { return name; }
     }
 
     public static String encontrarIpPorUuid(Map<String, DeviceInfo> dispositivos, String uuidSalvo) {
