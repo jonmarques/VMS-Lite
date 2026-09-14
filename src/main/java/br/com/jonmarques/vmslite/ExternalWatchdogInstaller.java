@@ -33,238 +33,236 @@ import java.nio.file.StandardOpenOption;
  */
 public final class ExternalWatchdogInstaller {
 
-	private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");;
-	private static final String TASK_NAME = "VMSLiteWatchdog";
+    private static final boolean DEBUG = Boolean.getBoolean("vmslite.debug");
+    private static final String TASK_NAME = "VMSLiteWatchdog";
 
-	private ExternalWatchdogInstaller() {
-	}
+    private ExternalWatchdogInstaller() {
+    }
 
-	public static void install() {
-		// Só faz sentido no Windows (Tarefa Agendada + schtasks são específicos dele)
-		String os = System.getProperty("os.name", "").toLowerCase();
-		if (!os.contains("win")) {
-			logDebug("Sistema não é Windows, watchdog externo não instalado (sem suporte ainda).");
-			return;
-		}
+    public static void install() {
+        // Só faz sentido no Windows (Tarefa Agendada + schtasks são específicos dele)
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (!os.contains("win")) {
+            logDebug("Sistema não é Windows, watchdog externo não instalado (sem suporte ainda).");
+            return;
+        }
 
-		try {
+        try {
 
-			if (taskAlreadyExists()) {
-				logDebug("Tarefa Agendada '" + TASK_NAME + "' já existe. Nada a fazer.");
-				return;
-			}
+            if (!Files.isRegularFile(getInstallDirectory().resolve("VMSLite.exe"))) return;
+            if (taskAlreadyExists()) {
+                logDebug("Tarefa Agendada '" + TASK_NAME + "' já existe. Nada a fazer.");
+                return;
+            }
 
-			Path scriptPath = writeWatchdogScript();
-			registerScheduledTask(scriptPath);
+            Path scriptPath = writeWatchdogScript();
+            registerScheduledTask(scriptPath);
 
-			logDebug("Watchdog externo instalado com sucesso (Tarefa Agendada: " + TASK_NAME + ").");
-		} catch (Exception e) {
-			logDebug("Falha ao instalar watchdog externo: " + e.getMessage());
-		}
+            logDebug("Watchdog externo instalado com sucesso (Tarefa Agendada: " + TASK_NAME + ").");
+        } catch (Exception e) {
+            logDebug("Falha ao instalar watchdog externo: " + e.getMessage());
+        }
 
-	}
+    }
 
-	// ---------- Verifica se a tarefa já existe ----------
+    // ---------- Verifica se a tarefa já existe ----------
 
-	private static boolean taskAlreadyExists() throws IOException, InterruptedException {
+    private static boolean taskAlreadyExists() throws IOException, InterruptedException {
 
-		ProcessBuilder pb = new ProcessBuilder("schtasks", "/query", "/tn", TASK_NAME);
-		pb.redirectErrorStream(true);
-		Process p = pb.start();
-		// Descarta a saída (não precisamos ler, só saber o exit code)
-		p.getInputStream().readAllBytes();
-		int exitCode = p.waitFor();
-		return exitCode == 0; // 0 = achou a tarefa; != 0 = não existe
-	}
+        ProcessBuilder pb = new ProcessBuilder("schtasks", "/query", "/tn", TASK_NAME);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+        // Descarta a saída (não precisamos ler, só saber o exit code)
+        p.getInputStream().readAllBytes();
+        int exitCode = p.waitFor();
+        return exitCode == 0; // 0 = achou a tarefa; != 0 = não existe
+    }
 
-	// ---------- Gera o watchdog.ps1 ----------
+    // ---------- Gera o watchdog.ps1 ----------
 
-	private static Path writeWatchdogScript() throws IOException {
+    private static Path writeWatchdogScript() throws IOException {
 
-		Path appDir = getInstallDirectory();
+        Path appDir = getInstallDirectory();
 
-		System.out.println("Diretório real do VMS Lite: " + appDir);
+        System.out.println("Diretório real do VMS Lite: " + appDir);
 
+        String exePath = appDir.resolve("VMS Lite.exe").toString();
 
-		String exePath = appDir.resolve("VMS Lite.exe").toString();
+        String heartbeatPath = appDir.resolve("heartbeat.txt").toString();
 
-		String heartbeatPath = appDir.resolve("heartbeat.txt").toString();
+        Path scriptPath = appDir.resolve("watchdog.ps1");
 
-		Path scriptPath = appDir.resolve("watchdog.ps1");
+        String script = buildScriptContent(
+                exePath,
+                heartbeatPath
+                );
 
+        Files.writeString(
+                scriptPath,
+                script,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING
+                );
 
-		String script = buildScriptContent(
-				exePath,
-				heartbeatPath
-				);
+        Path vbsPath = appDir.resolve("watchdog.vbs");
 
+        String vbsContent =
+                "Set sh = CreateObject(\"WScript.Shell\")\r\n" +
+                        "sh.Run \"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"\""
+                        + scriptPath.toString()
+                        + "\"\"\", 0, False\r\n";
 
-		Files.writeString(
-				scriptPath,
-				script,
-				StandardCharsets.UTF_8,
-				StandardOpenOption.CREATE,
-				StandardOpenOption.TRUNCATE_EXISTING
-				);
+        Files.writeString(
+                vbsPath,
+                vbsContent,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING
+                );
 
-		Path vbsPath = appDir.resolve("watchdog.vbs");
+        return vbsPath;
 
-		String vbsContent =
-				"Set sh = CreateObject(\"WScript.Shell\")\r\n" +
-						"sh.Run \"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"\""
-						+ scriptPath.toString()
-						+ "\"\"\", 0, False\r\n";
+    }
 
-		Files.writeString(
-				vbsPath,
-				vbsContent,
-				StandardCharsets.UTF_8,
-				StandardOpenOption.CREATE,
-				StandardOpenOption.TRUNCATE_EXISTING
-				);
+    private static String buildScriptContent(String exePath, String heartbeatPath) {
+        // Script "de tiro único": roda, checa, e sai. A Tarefa Agendada é quem
+        // se encarrega de rodar ele de novo a cada 1 minuto (via /sc MINUTE).
+        // Isso evita ficar com um processo PowerShell em loop infinito rodando
+        // o tempo todo em segundo plano.
+        return ""
+        + "$ErrorActionPreference = 'SilentlyContinue'\r\n"
+        + "$exePath = \"" + escapeForPs(exePath) + "\"\r\n"
+        + "$heartbeatFile = \"" + escapeForPs(heartbeatPath) + "\"\r\n"
+        + "$maxAgeSeconds = 45\r\n"
+        + "\r\n"
+        + "$proc = Get-Process | Where-Object { $_.Path -eq $exePath } | Select-Object -First 1\r\n"
+        + "\r\n"
+        + "$precisaReiniciar = $false\r\n"
+        + "\r\n"
+        + "if (-not $proc) {\r\n"
+        + "    # Processo nem está rodando -> reabre\r\n"
+        + "    $precisaReiniciar = $true\r\n"
+        + "} elseif (Test-Path $heartbeatFile) {\r\n"
+        + "    $conteudo = Get-Content $heartbeatFile -ErrorAction SilentlyContinue\r\n"
+        + "    if ($conteudo) {\r\n"
+        + "        $ultimoHeartbeat = [long]$conteudo\r\n"
+        + "        $agoraMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\r\n"
+        + "        $idadeSegundos = ($agoraMs - $ultimoHeartbeat) / 1000\r\n"
+        + "        if ($idadeSegundos -gt $maxAgeSeconds) {\r\n"
+        + "            $precisaReiniciar = $true\r\n"
+        + "        }\r\n"
+        + "    }\r\n"
+        + "}\r\n"
+        + "\r\n"
+        + "if ($precisaReiniciar) {\r\n"
+        + "    if ($proc) {\r\n"
+        + "        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\r\n"
+        + "        Start-Sleep -Seconds 2\r\n"
+        + "    }\r\n"
+        + "    Add-Content -Path (Join-Path (Split-Path $exePath) 'watchdog-external.log') -Value (\"Tentando abrir: \" + $exePath)\r\n"
+        + "    Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)\r\n"
+        + "    $logLine = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + \" - Watchdog externo reiniciou o VMSLite.\"\r\n"
+        + "    Add-Content -Path (Join-Path (Split-Path $exePath) 'watchdog-external.log') -Value $logLine\r\n"
+        + "}\r\n";
+    }
 
-		return vbsPath;
+    private static String escapeForPs(String value) {
+        return value.replace("\"", "`\"");
+    }
 
-	}
+    // ---------- Registra a Tarefa Agendada ----------
 
-	private static String buildScriptContent(String exePath, String heartbeatPath) {
-		// Script "de tiro único": roda, checa, e sai. A Tarefa Agendada é quem
-		// se encarrega de rodar ele de novo a cada 1 minuto (via /sc MINUTE).
-		// Isso evita ficar com um processo PowerShell em loop infinito rodando
-		// o tempo todo em segundo plano.
-		return ""
-		+ "$ErrorActionPreference = 'SilentlyContinue'\r\n"
-		+ "$exePath = \"" + escapeForPs(exePath) + "\"\r\n"
-		+ "$heartbeatFile = \"" + escapeForPs(heartbeatPath) + "\"\r\n"
-		+ "$maxAgeSeconds = 45\r\n"
-		+ "\r\n"
-		+ "$proc = Get-Process | Where-Object { $_.Path -eq $exePath } | Select-Object -First 1\r\n"
-		+ "\r\n"
-		+ "$precisaReiniciar = $false\r\n"
-		+ "\r\n"
-		+ "if (-not $proc) {\r\n"
-		+ "    # Processo nem está rodando -> reabre\r\n"
-		+ "    $precisaReiniciar = $true\r\n"
-		+ "} elseif (Test-Path $heartbeatFile) {\r\n"
-		+ "    $conteudo = Get-Content $heartbeatFile -ErrorAction SilentlyContinue\r\n"
-		+ "    if ($conteudo) {\r\n"
-		+ "        $ultimoHeartbeat = [long]$conteudo\r\n"
-		+ "        $agoraMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\r\n"
-		+ "        $idadeSegundos = ($agoraMs - $ultimoHeartbeat) / 1000\r\n"
-		+ "        if ($idadeSegundos -gt $maxAgeSeconds) {\r\n"
-		+ "            $precisaReiniciar = $true\r\n"
-		+ "        }\r\n"
-		+ "    }\r\n"
-		+ "}\r\n"
-		+ "\r\n"
-		+ "if ($precisaReiniciar) {\r\n"
-		+ "    if ($proc) {\r\n"
-		+ "        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\r\n"
-		+ "        Start-Sleep -Seconds 2\r\n"
-		+ "    }\r\n"
-		+ "    Add-Content -Path (Join-Path (Split-Path $exePath) 'watchdog-external.log') -Value (\"Tentando abrir: \" + $exePath)\r\n"
-		+ "    Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)\r\n"
-		+ "    $logLine = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + \" - Watchdog externo reiniciou o VMSLite.\"\r\n"
-		+ "    Add-Content -Path (Join-Path (Split-Path $exePath) 'watchdog-external.log') -Value $logLine\r\n"
-		+ "}\r\n";
-	}
+    private static void registerScheduledTask(Path vbsPath)
+            throws IOException, InterruptedException {
 
-	private static String escapeForPs(String value) {
-		return value.replace("\"", "`\"");
-	}
+        // Caminho do vbs com aspas devidamente escapadas para o parser do schtasks
+        String vbsAbsolutePath = vbsPath.toAbsolutePath().toString();
 
-	// ---------- Registra a Tarefa Agendada ----------
+        // Sintaxe correta para o /tr lidar com caminhos contendo espaços
+        String taskCommand = "C:\\Windows\\System32\\wscript.exe \"\"\"" + vbsAbsolutePath + "\"\"\"";
 
-	private static void registerScheduledTask(Path vbsPath)
-	        throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(
+                "schtasks",
+                "/create",
+                "/tn", TASK_NAME,
+                "/tr", taskCommand,
+                "/sc", "MINUTE",
+                "/mo", "1",
+                "/rl", "LIMITED",
+                "/f"
+        );
 
-	    // Caminho do vbs com aspas devidamente escapadas para o parser do schtasks
-	    String vbsAbsolutePath = vbsPath.toAbsolutePath().toString();
-	    
-	    // Sintaxe correta para o /tr lidar com caminhos contendo espaços
-	    String taskCommand = "C:\\Windows\\System32\\wscript.exe \"\"\"" + vbsAbsolutePath + "\"\"\"";
+        pb.redirectErrorStream(true);
 
-	    ProcessBuilder pb = new ProcessBuilder(
-	            "schtasks",
-	            "/create",
-	            "/tn", TASK_NAME,
-	            "/tr", taskCommand,
-	            "/sc", "MINUTE",
-	            "/mo", "1",
-	            "/rl", "LIMITED",
-	            "/f"
-	    );
+        Process p = pb.start();
 
-	    pb.redirectErrorStream(true);
+        String output = new String(
+                p.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8
+        );
 
-	    Process p = pb.start();
+        int exitCode = p.waitFor();
 
-	    String output = new String(
-	            p.getInputStream().readAllBytes(),
-	            StandardCharsets.UTF_8
-	    );
+        if (exitCode != 0) {
+            throw new IOException(
+                    "schtasks retornou código "
+                            + exitCode + ": " + output);
+        }
+    }
+    /**
+     * Opcional: remove a Tarefa Agendada, caso você queira dar essa opção
+     * ao usuário num botão de "desinstalar watchdog" ou no desinstalador
+     * do app.
+     */
+    public static void uninstall() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("schtasks", "/delete", "/tn", TASK_NAME, "/f");
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            p.getInputStream().readAllBytes();
+            p.waitFor();
+            logDebug("Tarefa Agendada removida.");
+        } catch (Exception e) {
+            logDebug("Falha ao remover Tarefa Agendada: " + e.getMessage());
+        }
+    }
 
-	    int exitCode = p.waitFor();
+    private static Path getInstallDirectory() {
 
-	    if (exitCode != 0) {
-	        throw new IOException(
-	                "schtasks retornou código "
-	                        + exitCode + ": " + output);
-	    }
-	}
-	/**
-	 * Opcional: remove a Tarefa Agendada, caso você queira dar essa opção
-	 * ao usuário num botão de "desinstalar watchdog" ou no desinstalador
-	 * do app.
-	 */
-	public static void uninstall() {
-		try {
-			ProcessBuilder pb = new ProcessBuilder("schtasks", "/delete", "/tn", TASK_NAME, "/f");
-			pb.redirectErrorStream(true);
-			Process p = pb.start();
-			p.getInputStream().readAllBytes();
-			p.waitFor();
-			logDebug("Tarefa Agendada removida.");
-		} catch (Exception e) {
-			logDebug("Falha ao remover Tarefa Agendada: " + e.getMessage());
-		}
-	}
+        try {
 
-	private static Path getInstallDirectory() {
+            Path exe = Paths.get(
+                    ExternalWatchdogInstaller.class
+                    .getProtectionDomain()
+                    .getCodeSource()
+                    .getLocation()
+                    .toURI()
+                    );
 
-		try {
+            String path = exe.toString();
 
-			Path exe = Paths.get(
-					ExternalWatchdogInstaller.class
-					.getProtectionDomain()
-					.getCodeSource()
-					.getLocation()
-					.toURI()
-					);
+            // remove \app\arquivo.jar
+            if (path.contains("\\app\\")) {
 
-			String path = exe.toString();
+                return Paths.get(
+                        path.substring(
+                                0,
+                                path.indexOf("\\app\\")
+                                )
+                        );
+            }
 
-			// remove \app\arquivo.jar
-			if (path.contains("\\app\\")) {
+            return exe.getParent();
 
-				return Paths.get(
-						path.substring(
-								0,
-								path.indexOf("\\app\\")
-								)
-						);
-			}
+        } catch(Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 
-			return exe.getParent();
-
-		} catch(Exception e) {
-			throw new RuntimeException(e);
-		}
-	}
-
-	private static void logDebug(String message) {
-		if(DEBUG) {
-			System.out.println("[ExternalWatchdogInstaller] " + message);
-		}
-	}
+    private static void logDebug(String message) {
+        if(DEBUG) {
+            System.out.println("[ExternalWatchdogInstaller] " + message);
+        }
+    }
 }

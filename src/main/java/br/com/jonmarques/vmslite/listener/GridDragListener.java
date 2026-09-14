@@ -21,7 +21,7 @@ public class GridDragListener extends MouseAdapter {
 
     @Override
     public void mousePressed(MouseEvent e) {
-        if (SwingUtilities.isRightMouseButton(e)) return;
+        if (!SwingUtilities.isLeftMouseButton(e) || panel.getParent() == null) return;
 
         // Inicia o ponto de clique baseado na tela global
         startClickPoint = e.getLocationOnScreen();
@@ -35,7 +35,7 @@ public class GridDragListener extends MouseAdapter {
 
     @Override
     public void mouseDragged(MouseEvent e) {
-        if (startClickPoint == null) return;
+        if (startClickPoint == null || panel.getParent() == null) return;
 
         Point currentTarget = e.getLocationOnScreen();
         int deltaX = currentTarget.x - startClickPoint.x;
@@ -54,7 +54,10 @@ public class GridDragListener extends MouseAdapter {
 
     @Override
     public void mouseReleased(MouseEvent e) {
-        if (startClickPoint == null) return;
+        if (startClickPoint == null || panel.getParent() == null) {
+            startClickPoint = null;
+            return;
+        }
 
         JPanel parent = (JPanel) panel.getParent();
         // Converte o ponto final do mouse para as coordenadas do painel pai

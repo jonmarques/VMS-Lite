@@ -11,7 +11,8 @@ public class SingleInstance {
     private static FileChannel channel;
     private static FileLock lock;
 
-    public static boolean lock() {
+    public static synchronized boolean lock() {
+        if (lock != null && lock.isValid()) return true;
         try {
             File file = new File(System.getProperty("java.io.tmpdir"), "vmslite.lock");
 
@@ -28,11 +29,12 @@ public class SingleInstance {
             return true;
 
         } catch (Exception e) {
+            unlock();
             return false;
         }
     }
 
-    public static void unlock() {
+    public static synchronized void unlock() {
         try {
             if (lock != null) {
                 lock.release();
@@ -53,5 +55,8 @@ public class SingleInstance {
             }
         } catch (Exception ignored) {
         }
+        lock = null;
+        channel = null;
+        raf = null;
     }
 }

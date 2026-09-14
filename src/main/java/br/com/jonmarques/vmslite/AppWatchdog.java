@@ -53,6 +53,7 @@ public final class AppWatchdog {
 
     private static final AtomicLong lastEdtResponse = new AtomicLong(System.currentTimeMillis());
     private static volatile boolean started = false;
+    private static Timer edtPing;
 
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2, new ThreadFactory() {
         private int count = 1;
@@ -91,7 +92,7 @@ public final class AppWatchdog {
         // Usa javax.swing.Timer porque ele já roda o callback na própria EDT,
         // então se a EDT travar, o timer simplesmente para de disparar —
         // é exatamente o sinal que queremos detectar.
-        Timer edtPing = new Timer((int) EDT_PING_INTERVAL_MS, e -> lastEdtResponse.set(System.currentTimeMillis()));
+        edtPing = new Timer((int) EDT_PING_INTERVAL_MS, e -> lastEdtResponse.set(System.currentTimeMillis()));
         edtPing.setRepeats(true);
         edtPing.start();
     }
@@ -111,6 +112,11 @@ public final class AppWatchdog {
                 logDebug("Falha ao gravar heartbeat.txt: " + e.getMessage());
             }
         }, 5, 5, TimeUnit.SECONDS);
+    }
+
+    public static synchronized void stop() {
+        if (edtPing != null) edtPing.stop();
+        scheduler.shutdownNow();
     }
 
     // ---------- 3. Checagem e restart ----------
@@ -156,6 +162,7 @@ public final class AppWatchdog {
                 ProcessBuilder pb = new ProcessBuilder(exePath);
                 pb.directory(new File(System.getProperty("user.dir")));
                 pb.inheritIO();
+                SingleInstance.unlock();
                 pb.start();
                 logDebug("Novo processo iniciado: " + exePath);
             } else {

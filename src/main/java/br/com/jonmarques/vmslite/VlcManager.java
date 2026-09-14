@@ -7,11 +7,7 @@ import uk.co.caprica.vlcj.player.component.InputEvents;
 public final class VlcManager {
     private static MediaPlayerFactory factory;
 
-    private VlcManager() {
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            VlcManager.shutdown();
-        }));
-    }
+    private VlcManager() {}
 
     public static synchronized void init() {
         if (factory == null) {
@@ -19,7 +15,7 @@ public final class VlcManager {
         }
     }
 
-    public static EmbeddedMediaPlayerComponent createPlayer() {
+    public static synchronized EmbeddedMediaPlayerComponent createPlayer() {
         if (factory == null) {
             init();
         }
