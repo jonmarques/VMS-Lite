@@ -9,7 +9,7 @@ public final class ApplicationBootstrap {
     public static void prepare() {
         // Keep AWT painting defaults when mixing Swing with VLC's native Canvas.
 
-        String basePath = System.getProperty("user.dir");
+        String basePath = ApplicationPaths.installDirectory().toString();
 
         NativeLibrary.addSearchPath(
                 RuntimeUtil.getLibVlcLibraryName(),
@@ -25,22 +25,7 @@ public final class ApplicationBootstrap {
     public static void addToStartup(String appName, String exePath) {
         if (!Files.isRegularFile(Path.of(exePath))) return;
         try {
-            ProcessBuilder check = new ProcessBuilder(
-                    "reg",
-                    "query",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    appName
-                    );
-
-            check.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-            check.redirectError(ProcessBuilder.Redirect.DISCARD);
-            Process p = check.start();
-            int result = p.waitFor();
-
-            if (result == 0) {
-                return; // já existe
-            }
+            // Refresh existing registrations as the installation may have moved.
 
             ProcessBuilder add = new ProcessBuilder(
                     "reg",

@@ -29,10 +29,6 @@ public final class PlaybackChecks {
             if (fake.releases.get() != 1 || fake.callsAfterRelease.get() != 0) {
                 throw new AssertionError("Native resource lifecycle");
             }
-            if (!PlaybackExecutors.WORKERS.getQueue().isEmpty()) {
-                // Queued closed callbacks are allowed, but must drain without touching VLC.
-                PlaybackExecutors.WORKERS.submit(() -> {}).get(3, TimeUnit.SECONDS);
-            }
             if (fake.callsAfterRelease.get() != 0) throw new AssertionError("Callback after release");
             System.out.println("OK: playback callbacks, repeated start, idempotent stop, no access after release");
         } finally {

@@ -2,11 +2,9 @@ package br.com.jonmarques.vmslite;
 
 import javax.swing.Timer;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -46,8 +44,8 @@ public final class AppWatchdog {
     private static final long CHECK_INTERVAL_SEC = 3;         // intervalo de checagem
     private static final long EDT_PING_INTERVAL_MS = 1_000;   // frequência do ping na EDT
 
-    private static final Path HEARTBEAT_FILE = Paths.get(System.getProperty("user.dir"), "heartbeat.txt");
-    private static final Path RESTART_MARKER_FILE = Paths.get(System.getProperty("user.dir"), "watchdog-restarts.log");
+    private static final Path HEARTBEAT_FILE = ApplicationPaths.dataDirectory().resolve("heartbeat.txt");
+    private static final Path RESTART_MARKER_FILE = ApplicationPaths.dataDirectory().resolve("watchdog-restarts.log");
     private static final int MAX_RESTARTS_IN_WINDOW = 3;
     private static final long RESTART_WINDOW_MS = TimeUnit.MINUTES.toMillis(10);
 
@@ -78,6 +76,8 @@ public final class AppWatchdog {
             return;
         }
         started = true;
+        try { Files.createDirectories(ApplicationPaths.dataDirectory()); }
+        catch (IOException error) { logDebug("Nao foi possivel criar o diretorio do watchdog."); }
 
         startEdtPing();
         startFileHeartbeat();
@@ -155,21 +155,20 @@ public final class AppWatchdog {
             // VMSLite.exe na pasta de instalação -- é o mesmo caminho que o
             // próprio VMSLite.java já usa no addToStartup(). Usamos o mesmo aqui,
             // por consistência e confiabilidade.
-            String exePath = System.getProperty("user.dir") + File.separator + "VMSLite.exe";
-            File exeFile = new File(exePath);
+            Path executable = ApplicationPaths.executable().orElse(null);
 
-            if (exeFile.exists()) {
-                ProcessBuilder pb = new ProcessBuilder(exePath);
-                pb.directory(new File(System.getProperty("user.dir")));
+            if (executable != null) {
+                ProcessBuilder pb = new ProcessBuilder(executable.toString());
+                pb.directory(executable.getParent().toFile());
                 pb.inheritIO();
                 SingleInstance.unlock();
                 pb.start();
-                logDebug("Novo processo iniciado: " + exePath);
+                logDebug("Novo processo iniciado: " + executable);
             } else {
                 // Provavelmente rodando via IDE/dev, sem o .exe empacotado presente.
                 // Não há como reiniciar de forma confiável nesse cenário -- loga e
                 // deixa o watchdog externo (heartbeat.txt) como única rede de segurança.
-                logDebug("VMSLite.exe não encontrado em " + exePath
+                logDebug("Executavel do VMS Lite nao encontrado"
                         + " (provável ambiente de desenvolvimento). Restart automático abortado.");
             }
         } catch (Exception e) {

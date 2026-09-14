@@ -8,14 +8,14 @@ Aplicacao Java 21 / Swing para monitoramento RTSP com VLCJ e descoberta ONVIF.
 - `CameraPanel`: superficie de video, estado visual e eventos do mouse.
 - `playback/CameraPlayback`: inicio, reconexao, deteccao de congelamento e encerramento por camera.
 - `playback/VideoPlayer` e `VlcVideoPlayer`: contrato de reproducao e adaptador VLCJ; permitem testar o ciclo de vida sem carregar VLC.
-- `playback/PlaybackExecutors`: pools compartilhados e remocao imediata de tarefas canceladas.
+- `playback/PlaybackExecutors` e `CameraCommandQueue`: um trabalhador nativo por camera, fila limitada por tipo de comando e temporizador compartilhado sem chamadas VLC. Pedidos repetidos pendentes sao agrupados.
 - `ui/CameraGridLayout`: calculo da grade sem matriz de ocupacao; limita a largura da camera as colunas disponiveis.
 - `ui/CameraEditorDialog` e `OnvifDiscoveryDialog`: edicao e inclusao de cameras.
 - `service/OnvifDiscoveryService`: descoberta multicast compartilhada, cache de 30 segundos e limite de 120 segundos para buscas de reconexao.
 - `service/OnvifMediaService`, `OnvifSoapClient` e `OnvifXml`: perfis de video, transporte SOAP e leitura XML com namespaces.
 - `service/CameraAddress`: extracao/substituicao do host sem alterar credenciais ou parametros.
 - `service/ConfigService`: validacao e gravacao por arquivo temporario seguido de substituicao atomica quando suportada.
-- `service/ConfigWriter`: gravacao fora da interface, agrupando alteracoes feitas em ate 300 ms.
+- `service/ConfigWriter`: gravacao fora da interface, agrupando alteracoes feitas em ate 300 ms; permanece bloqueada ate uma configuracao ser carregada ou restaurada com sucesso.
 - `ApplicationBootstrap`, `SingleInstance`, `AppWatchdog` e `ExternalWatchdogInstaller`: inicializacao e integracao com o sistema.
 
 As alteracoes na lista de cameras e na interface ocorrem na thread do Swing. Operacoes nativas de reproducao ficam fora dela e sao serializadas por camera. O encerramento espera a liberacao dos players antes de liberar a fabrica VLC; se uma chamada nativa travar, o processo termina sem liberar a fabrica enquanto ainda ha players em uso.
@@ -57,6 +57,17 @@ A janela mostra a quantidade de interfaces pesquisadas, dispositivos encontrados
 O teste `br.com.jonmarques.vmslite.service.OnvifDiscoveryChecks` verifica mensagens, XML, endpoints e respostas UDP locais com perda simulada de pacotes. O argumento opcional `--network` executa uma descoberta real e informa contagens, sem adicionar cameras ou acessar suas credenciais.
 
 ## Verificacao Local
+
+### Correcoes de estabilidade
+
+- Se a leitura inicial do JSON falhar, o arquivo permanece preservado e somente Importar/Tela Cheia ficam disponiveis. Uma importacao valida libera novamente a gravacao. Nao se cria uma configuracao vazia sobre o arquivo com erro.
+- `ApplicationPaths` resolve o executavel real, incluindo os nomes `VMS Lite.exe` e `VMSLite.exe`, sem depender do diretorio de trabalho quando empacotado. Inicializacao automatica, bibliotecas VLC e watchdogs usam essa referencia. Heartbeat, scripts e registros do watchdog ficam em `%USERPROFILE%/.vmslite`; a tarefa antiga e atualizada na proxima inicializacao empacotada.
+- Chamadas nativas ficam isoladas por camera. Uma chamada travada nao ocupa trabalhadores de outras cameras. Ha no maximo um comando pendente de cada tipo por camera, e consultas de metricas expiram em 3 segundos. A liberacao continua esperando a chamada nativa terminar; nao se libera uma superficie em uso. Isso usa um trabalhador por camera, portanto nao representa uma promessa de reducao de RAM.
+- Reconexoes usam espera progressiva proxima de 5, 10, 20, 40 e ate 60 segundos, com variacao entre cameras. A espera volta ao inicio quando o video reproduz; consultas ONVIF de reconexao continuam limitadas. Caching e opcoes de substream nao foram alterados.
+- SOAP tem limite de 2 MiB por resposta e prazo total de 10 segundos, incluindo o corpo. Erros de autenticacao, endereco, transporte e resposta possuem mensagens sem credenciais. O fallback de URL por modelo permanece disponivel para falhas que nao sejam de autenticacao, acompanhado de aviso.
+- Metricas, tour e tela cheia compartilham um unico temporizador de mouse por janela. Texto, HTML e geometria dos indicadores so sao atualizados quando mudam.
+
+Testes adicionais: `ApplicationPathsChecks`, `service.ConfigRecoveryChecks`, `service.OnvifSoapChecks`, `playback.PlaybackIsolationChecks` e `ui.HoverPointerChecks`, no pacote base `br.com.jonmarques.vmslite`. Nenhum deles registra tarefas, altera o startup ou inicia cameras reais.
 
 Ao passar o mouse sobre qualquer camera, um indicador sobreposto mostra o estado de conexao, FPS exibido e taxa de midia recebida em Mbps. As taxas sao calculadas pela diferenca dos contadores VLC entre amostras, aproximadamente uma vez por segundo, apenas para a camera sob o mouse. A primeira amostra, reconexoes e estatisticas indisponiveis mostram `--`. A taxa de midia nao inclui todo o overhead de rede. O indicador nao reduz a imagem e fica oculto fora da camera ou com o aplicativo inativo.
 

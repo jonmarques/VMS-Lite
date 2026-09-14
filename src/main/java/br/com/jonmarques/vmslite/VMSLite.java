@@ -51,6 +51,8 @@ public class VMSLite extends JFrame {
 
     private JPanel topBar;
     private JButton btnFullscreen;
+    private JButton importButton;
+    private boolean configurationRecoveryRequired;
     private FullscreenControls fullscreenControls;
     private CameraMetricsOverlay metricsOverlay;
 
@@ -97,10 +99,13 @@ public class VMSLite extends JFrame {
                 if (closing) return;
                 try {
                     vmsconfig = get();
+                    configWriter.enableWrites();
                     loadSavedCameras();
                 } catch (Exception error) {
+                    configurationRecoveryRequired = !configWriter.isWritable();
                     JOptionPane.showMessageDialog(VMSLite.this,
-                            "Erro ao carregar configuracao. O arquivo original foi preservado.",
+                            "Erro ao carregar configuracao. O arquivo original foi preservado.\n"
+                            + "Use Importar para restaurar uma configuracao valida antes de fazer alteracoes.",
                             "Erro", JOptionPane.ERROR_MESSAGE);
                     cardLayout.show(mainContainer, "CAMERAS");
                     setConfigurationActionsEnabled(true);
@@ -196,7 +201,7 @@ public class VMSLite extends JFrame {
         topBar.add(gridButton);
         topBar.add(Box.createHorizontalStrut(5));
 
-        JButton importButton = new JButton("Importar");
+        importButton = new JButton("Importar");
         JButton tourButton = new JButton("Tour");
         tourButton.addActionListener(e -> {
             var settings = CameraTourDialog.show(this, vmsconfig.getCameras(), vmsconfig.getCameraTour());
@@ -387,7 +392,8 @@ public class VMSLite extends JFrame {
     private void setConfigurationActionsEnabled(boolean enabled) {
         loadingConfiguration = !enabled;
         for (Component component : topBar.getComponents()) {
-            if (component instanceof JButton) component.setEnabled(enabled);
+            if (component instanceof JButton) component.setEnabled(enabled && (!configurationRecoveryRequired
+                    || component == importButton || component == btnFullscreen));
         }
     }
 
@@ -401,7 +407,7 @@ public class VMSLite extends JFrame {
             SwingUtilities.invokeLater(this::saveConfigs);
             return;
         }
-        if (!closing) {
+        if (!closing && configWriter.isWritable()) {
             if (tourPanel != null) tourPanel.configure(vmsconfig.getCameraTour(), vmsconfig.getCameras());
             configWriter.save(ConfigService.snapshot(vmsconfig));
         }
@@ -467,6 +473,8 @@ public class VMSLite extends JFrame {
                 if (closing) return;
                 try {
                     VMSConfig imported = get();
+                    configurationRecoveryRequired = false;
+                    configWriter.enableWrites();
                     if (sequentialOpener != null) sequentialOpener.stop();
                     cameras.forEach(CameraPanel::stop);
                     if (tourPanel != null) { tourPanel.stop(); tourPanel = null; }
@@ -576,8 +584,7 @@ public class VMSLite extends JFrame {
         }
         Runtime.getRuntime().addShutdownHook(new Thread(SingleInstance::unlock));
 
-        String exePath = System.getProperty("user.dir") + "\\VMSLite.exe";
-        addToStartup("VMSLite", exePath);
+        ApplicationPaths.executable().ifPresent(exe -> addToStartup("VMSLite", exe.toString()));
 
         SwingUtilities.invokeLater(VMSLite::new);
     }

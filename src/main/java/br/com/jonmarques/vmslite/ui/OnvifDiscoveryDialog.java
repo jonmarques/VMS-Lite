@@ -182,18 +182,24 @@ public final class OnvifDiscoveryDialog {
                             int rowSpan = (Integer) linhasField.getValue();
                             int colSpan = (Integer) colunasField.getValue();
                             String serviceUrl = dispositivos.get(ip).getXaddr();
-                            new SwingWorker<String, Void>() {
-                                @Override protected String doInBackground() {
-                                    return serviceOnvif.obterUrlRtsp(serviceUrl, user, pass, modelo, ip, isSubstream);
+                            new SwingWorker<OnvifMediaService.StreamResult, Void>() {
+                                @Override protected OnvifMediaService.StreamResult doInBackground() {
+                                    return serviceOnvif.resolveStream(serviceUrl, user, pass, modelo, ip, isSubstream);
                                 }
                                 @Override protected void done() {
                                     if (!owner.acceptsCameraResults(generation)) return;
                                     try {
-                                        String rtspUrl = get();
+                                        OnvifMediaService.StreamResult stream = get();
+                                        String rtspUrl = stream.url();
                                         if (rtspUrl == null) throw new IllegalStateException("URL RTSP indisponivel");
                                         owner.addCamera(new Camera(nomeFinal, rtspUrl, uuid, rowSpan, colSpan));
+                                        if (stream.warning() != null) JOptionPane.showMessageDialog(owner,
+                                                stream.warning(), "Aviso ONVIF", JOptionPane.WARNING_MESSAGE);
                                     } catch (Exception ex) {
-                                        JOptionPane.showMessageDialog(owner, "Nao foi possivel conectar a camera " + ip,
+                                        Throwable cause = ex instanceof java.util.concurrent.ExecutionException ? ex.getCause() : ex;
+                                        String detail = cause instanceof OnvifRequestException ? cause.getMessage()
+                                                : "Nao foi possivel conectar a camera " + ip;
+                                        JOptionPane.showMessageDialog(owner, detail,
                                                 "Erro de conexao", JOptionPane.ERROR_MESSAGE);
                                     }
                                 }

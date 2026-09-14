@@ -7,16 +7,12 @@ import javax.swing.*;
 public final class FullscreenControls {
     private final JFrame owner;
     private final Runnable exitFullscreen;
-    private final Timer pointerTimer;
+    private Runnable unsubscribe;
     private JWindow window;
 
     public FullscreenControls(JFrame owner, Runnable exitFullscreen) {
         this.owner = owner;
         this.exitFullscreen = exitFullscreen;
-        pointerTimer = new Timer(150, event -> {
-            PointerInfo pointer = MouseInfo.getPointerInfo();
-            if (pointer != null) update(pointer.getLocation());
-        });
     }
 
     public void setEnabled(boolean enabled) {
@@ -38,7 +34,7 @@ public final class FullscreenControls {
         window.setContentPane(button);
         window.pack();
         window.setSize(Math.max(170, window.getWidth()), Math.max(38, window.getHeight()));
-        pointerTimer.start();
+        unsubscribe = HoverPointerTracker.subscribe(owner, this::update);
     }
 
     public void update(Point screenPoint) {
@@ -46,16 +42,16 @@ public final class FullscreenControls {
         Rectangle bounds = owner.getBounds();
         int x = bounds.x + bounds.width - window.getWidth() - 20;
         int y = bounds.y + 15;
-        boolean nearButton = bounds.contains(screenPoint)
+        boolean nearButton = screenPoint != null && bounds.contains(screenPoint)
                 && screenPoint.y < y + window.getHeight() + 25
                 && screenPoint.x >= x - 40;
         boolean visible = owner.isActive() && owner.isShowing() && nearButton;
-        if (visible) window.setLocation(x, y);
+        if (visible && (window.getX() != x || window.getY() != y)) window.setLocation(x, y);
         if (window.isVisible() != visible) window.setVisible(visible);
     }
 
     public void dispose() {
-        pointerTimer.stop();
+        if (unsubscribe != null) { unsubscribe.run(); unsubscribe = null; }
         if (window != null) {
             window.dispose();
             window = null;

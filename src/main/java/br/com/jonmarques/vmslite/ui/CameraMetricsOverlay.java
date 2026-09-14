@@ -13,7 +13,7 @@ public final class CameraMetricsOverlay {
     private final Supplier<List<CameraPanel>> cameras;
     private final JWindow window;
     private final JLabel label = new JLabel();
-    private final Timer timer;
+    private final Runnable unsubscribe;
     private CameraPanel target;
     private PlaybackSample previous;
     private String rates = "FPS: -- | Dados: --";
@@ -21,6 +21,9 @@ public final class CameraMetricsOverlay {
     private long targetVersion;
     private boolean pending;
     private boolean closed;
+    private String renderedText;
+    private int renderedWidth = -1;
+    private int labelHeight = 27;
 
     public CameraMetricsOverlay(JFrame owner, Supplier<List<CameraPanel>> cameras) {
         this.owner = owner;
@@ -32,17 +35,15 @@ public final class CameraMetricsOverlay {
         label.setForeground(Color.WHITE);
         label.setBorder(BorderFactory.createEmptyBorder(4, 7, 4, 7));
         window.setContentPane(label);
-        timer = new Timer(150, event -> update());
-        timer.start();
+        unsubscribe = HoverPointerTracker.subscribe(owner, this::update);
     }
 
-    private void update() {
-        PointerInfo pointer = MouseInfo.getPointerInfo();
+    private void update(Point pointer) {
         CameraPanel hovered = null;
         if (owner.isActive() && owner.isShowing() && pointer != null) {
             for (CameraPanel camera : cameras.get()) {
                 if (camera.isShowing() && new Rectangle(camera.getLocationOnScreen(), camera.getSize())
-                        .contains(pointer.getLocation())) { hovered = camera; break; }
+                        .contains(pointer)) { hovered = camera; break; }
             }
         }
         if (target != hovered) {
@@ -51,9 +52,10 @@ public final class CameraMetricsOverlay {
             previous = null;
             rates = "FPS: -- | Dados: --";
             nextSample = 0;
+            pending = false;
         }
         if (target == null || target.getWidth() < 120 || target.getHeight() < 65) {
-            window.setVisible(false);
+            if (window.isVisible()) window.setVisible(false);
             return;
         }
         String connection = switch (target.getPlaybackState()) {
@@ -61,28 +63,34 @@ public final class CameraMetricsOverlay {
             case LOADING -> "Conectando";
             case RECONNECTING -> "Reconectando";
         };
-        label.setText(connection + " | " + rates);
+        String text = connection + " | " + rates;
         Point origin = target.getLocationOnScreen();
-        int height = 27;
-        if (label.getPreferredSize().width > target.getWidth() - 12) {
-            label.setText("<html>" + connection + "<br>" + rates.replace(" | ", "<br>") + "</html>");
-            height = label.getPreferredSize().height;
+        if (!text.equals(renderedText) || renderedWidth != target.getWidth()) {
+            renderedText = text;
+            renderedWidth = target.getWidth();
+            label.setText(text);
+            labelHeight = 27;
+            if (label.getPreferredSize().width > renderedWidth - 12) {
+                label.setText("<html>" + connection + "<br>" + rates.replace(" | ", "<br>") + "</html>");
+                labelHeight = label.getPreferredSize().height;
+            }
         }
-        if (target.getHeight() < height + 51) {
-            window.setVisible(false);
+        if (target.getHeight() < labelHeight + 51) {
+            if (window.isVisible()) window.setVisible(false);
             return;
         }
-        window.setBounds(origin.x + 6, origin.y + 6,
-                Math.min(label.getPreferredSize().width, target.getWidth() - 12), height);
-        window.setVisible(true);
+        Rectangle bounds = new Rectangle(origin.x + 6, origin.y + 6,
+                Math.min(label.getPreferredSize().width, target.getWidth() - 12), labelHeight);
+        if (!bounds.equals(window.getBounds())) window.setBounds(bounds);
+        if (!window.isVisible()) window.setVisible(true);
         long now = System.nanoTime();
         if (!pending && now >= nextSample) {
             pending = true;
             nextSample = now + 1_000_000_000L;
             long version = targetVersion;
             target.sample(sample -> SwingUtilities.invokeLater(() -> {
-                pending = false;
                 if (closed || version != targetVersion) return;
+                pending = false;
                 rates = sample.ratesSince(previous);
                 previous = sample;
             }));
@@ -91,7 +99,7 @@ public final class CameraMetricsOverlay {
 
     public void dispose() {
         closed = true;
-        timer.stop();
+        unsubscribe.run();
         target = null;
         window.dispose();
     }

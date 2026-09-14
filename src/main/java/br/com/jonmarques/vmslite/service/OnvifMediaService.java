@@ -24,6 +24,23 @@ public final class OnvifMediaService {
     }
 
     public String obterUrlRtsp(String serviceUrl, String usuario, String senha, String modelo, String ipPadrao, boolean preferirSubstream) {
+        return resolveStream(serviceUrl, usuario, senha, modelo, ipPadrao, preferirSubstream).url();
+    }
+
+    public record StreamResult(String url, String warning) {}
+
+    public StreamResult resolveStream(String serviceUrl, String usuario, String senha, String modelo, String ipPadrao, boolean preferirSubstream) {
+        try {
+            return new StreamResult(queryStream(serviceUrl, usuario, senha, modelo, ipPadrao, preferirSubstream), null);
+        } catch (OnvifRequestException error) {
+            if (error.getReason() == OnvifRequestException.Reason.AUTHENTICATION) throw error;
+            String fallback = montarUrlRtspFallback(ipPadrao, usuario, senha, modelo, preferirSubstream);
+            if (fallback == null) throw error;
+            return new StreamResult(fallback, error.getMessage() + " Sera tentada a URL alternativa do modelo.");
+        }
+    }
+
+    private String queryStream(String serviceUrl, String usuario, String senha, String modelo, String ipPadrao, boolean preferirSubstream) {
         if (serviceUrl != null && !serviceUrl.isBlank()) {
             long offsetRelogio = calcularOffsetRelogio(serviceUrl);
 

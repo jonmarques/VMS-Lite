@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 
 /**
@@ -12,7 +11,7 @@ import java.nio.file.StandardOpenOption;
  * Agendada do Windows, sem precisar de nenhum passo manual.
  *
  * O que ele faz, na primeira execução do app:
- *  1. Escreve um script watchdog.ps1 na pasta de instalação, gerado a
+ *  1. Escreve um script watchdog.ps1 na pasta de dados do usuario, gerado a
  *     partir do template abaixo (nada de arquivo externo pra distribuir).
  *  2. Registra uma Tarefa Agendada que roda esse script a cada 1 minuto,
  *     via `schtasks`.
@@ -49,14 +48,19 @@ public final class ExternalWatchdogInstaller {
 
         try {
 
-            if (!Files.isRegularFile(getInstallDirectory().resolve("VMSLite.exe"))) return;
-            if (taskAlreadyExists()) {
+            Path executable = ApplicationPaths.executable().orElse(null);
+            if (executable == null) return;
+            Files.createDirectories(ApplicationPaths.dataDirectory());
+            Path registration = ApplicationPaths.dataDirectory().resolve("watchdog-install.txt");
+            String signature = "paths-v2:" + executable;
+            if (Files.isRegularFile(registration) && Files.readString(registration).equals(signature) && taskAlreadyExists()) {
                 logDebug("Tarefa Agendada '" + TASK_NAME + "' já existe. Nada a fazer.");
                 return;
             }
 
             Path scriptPath = writeWatchdogScript();
             registerScheduledTask(scriptPath);
+            Files.writeString(registration, signature, StandardCharsets.UTF_8);
 
             logDebug("Watchdog externo instalado com sucesso (Tarefa Agendada: " + TASK_NAME + ").");
         } catch (Exception e) {
@@ -82,11 +86,11 @@ public final class ExternalWatchdogInstaller {
 
     private static Path writeWatchdogScript() throws IOException {
 
-        Path appDir = getInstallDirectory();
+        Path appDir = ApplicationPaths.dataDirectory();
 
-        System.out.println("Diretório real do VMS Lite: " + appDir);
+        logDebug("Diretorio de dados do VMS Lite: " + appDir);
 
-        String exePath = appDir.resolve("VMS Lite.exe").toString();
+        String exePath = ApplicationPaths.executable().orElseThrow().toString();
 
         String heartbeatPath = appDir.resolve("heartbeat.txt").toString();
 
@@ -160,15 +164,15 @@ public final class ExternalWatchdogInstaller {
         + "        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\r\n"
         + "        Start-Sleep -Seconds 2\r\n"
         + "    }\r\n"
-        + "    Add-Content -Path (Join-Path (Split-Path $exePath) 'watchdog-external.log') -Value (\"Tentando abrir: \" + $exePath)\r\n"
+        + "    Add-Content -Path (Join-Path (Split-Path $heartbeatFile) 'watchdog-external.log') -Value (\"Tentando abrir: \" + $exePath)\r\n"
         + "    Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)\r\n"
         + "    $logLine = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + \" - Watchdog externo reiniciou o VMSLite.\"\r\n"
-        + "    Add-Content -Path (Join-Path (Split-Path $exePath) 'watchdog-external.log') -Value $logLine\r\n"
+        + "    Add-Content -Path (Join-Path (Split-Path $heartbeatFile) 'watchdog-external.log') -Value $logLine\r\n"
         + "}\r\n";
     }
 
     private static String escapeForPs(String value) {
-        return value.replace("\"", "`\"");
+        return value.replace("`", "``").replace("$", "`$").replace("\"", "`\"");
     }
 
     // ---------- Registra a Tarefa Agendada ----------
@@ -228,37 +232,6 @@ public final class ExternalWatchdogInstaller {
         }
     }
 
-    private static Path getInstallDirectory() {
-
-        try {
-
-            Path exe = Paths.get(
-                    ExternalWatchdogInstaller.class
-                    .getProtectionDomain()
-                    .getCodeSource()
-                    .getLocation()
-                    .toURI()
-                    );
-
-            String path = exe.toString();
-
-            // remove \app\arquivo.jar
-            if (path.contains("\\app\\")) {
-
-                return Paths.get(
-                        path.substring(
-                                0,
-                                path.indexOf("\\app\\")
-                                )
-                        );
-            }
-
-            return exe.getParent();
-
-        } catch(Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     private static void logDebug(String message) {
         if(DEBUG) {

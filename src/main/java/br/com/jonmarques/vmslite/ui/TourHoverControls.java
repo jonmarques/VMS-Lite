@@ -7,7 +7,7 @@ import javax.swing.*;
 public final class TourHoverControls {
     private final JFrame owner;
     private final JWindow window;
-    private final Timer timer;
+    private Runnable unsubscribe;
     private Component target;
 
     public TourHoverControls(JFrame owner, JPanel content) {
@@ -15,17 +15,15 @@ public final class TourHoverControls {
         window = new JWindow(owner);
         window.setFocusableWindowState(false);
         window.setContentPane(content);
-        timer = new Timer(150, event -> {
-            PointerInfo pointer = MouseInfo.getPointerInfo();
-            update(pointer == null ? null : pointer.getLocation());
-        });
     }
 
     public void setTarget(Component target) {
         if (this.target != target) window.setVisible(false);
         this.target = target;
-        if (target == null) { timer.stop(); window.setVisible(false); }
-        else if (!timer.isRunning()) timer.start();
+        if (target == null) {
+            if (unsubscribe != null) { unsubscribe.run(); unsubscribe = null; }
+            window.setVisible(false);
+        } else if (unsubscribe == null) unsubscribe = HoverPointerTracker.subscribe(owner, this::update);
     }
 
     void update(Point pointer) {
@@ -35,7 +33,7 @@ public final class TourHoverControls {
             Rectangle video = new Rectangle(target.getLocationOnScreen(), target.getSize());
             Rectangle overlay = hoveredBounds(video, pointer);
             visible = overlay != null;
-            if (visible) window.setBounds(overlay);
+            if (visible && !overlay.equals(window.getBounds())) window.setBounds(overlay);
         }
         if (window.isVisible() != visible) window.setVisible(visible);
     }
@@ -47,7 +45,7 @@ public final class TourHoverControls {
     }
 
     public void dispose() {
-        timer.stop();
+        if (unsubscribe != null) { unsubscribe.run(); unsubscribe = null; }
         target = null;
         window.dispose();
     }

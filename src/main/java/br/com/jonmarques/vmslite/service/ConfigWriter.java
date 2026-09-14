@@ -15,17 +15,27 @@ public final class ConfigWriter implements AutoCloseable {
     });
     private final Consumer<Exception> onError;
     private ScheduledFuture<?> pending;
+    private boolean writesEnabled;
+    private final Consumer<VMSConfig> persist;
 
     public ConfigWriter(Consumer<Exception> onError) {
+        this(onError, ConfigService::save);
+    }
+
+    ConfigWriter(Consumer<Exception> onError, Consumer<VMSConfig> persist) {
         this.onError = onError;
+        this.persist = persist;
         executor.setRemoveOnCancelPolicy(true);
     }
 
+    public synchronized void enableWrites() { writesEnabled = true; }
+    public synchronized boolean isWritable() { return writesEnabled && !executor.isShutdown(); }
+
     public synchronized void save(VMSConfig snapshot) {
-        if (executor.isShutdown()) return;
+        if (!isWritable()) return;
         if (pending != null) pending.cancel(false);
         pending = executor.schedule(() -> {
-            try { ConfigService.save(snapshot); }
+            try { persist.accept(snapshot); }
             catch (Exception e) { onError.accept(e); }
         }, 300, TimeUnit.MILLISECONDS);
     }
